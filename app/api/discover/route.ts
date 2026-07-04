@@ -17,8 +17,8 @@ const COUNTRY = "us";
 const CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_MODEL = "llama-3.3-70b-versatile";
-const DISCOVER_CACHE_VERSION = "discover-v4";
-const RERANK_CACHE_VERSION = "rerank-v4";
+const DISCOVER_CACHE_VERSION = "discover-v6";
+const RERANK_CACHE_VERSION = "rerank-v6";
 
 const services: Array<{ id: ServiceId; name: string; catalog: string; accent: string }> = [
   { id: "netflix", name: "Netflix", catalog: "netflix.subscription", accent: "#e50914" },
@@ -140,7 +140,7 @@ async function rerankServiceUncached(service: ServiceResult, preference: string)
           {
             role: "system",
             content:
-              "You are a brutally accurate streaming recommendation ranker. Rank titles for the user's exact taste, not for generic popularity. Use semantic fit first, then audience/critic rating, then original streaming popularity. Strongly demote false positives. For psychological thrillers, prefer dread, paranoia, obsession, mind games, mystery, crime, horror, sci-fi unease, cults, conspiracies, investigations, dark tension, or unreliable reality. Comedy, sitcom, workplace comedy, reality, talk show, game show, light documentary, or general drama should rank low unless the title is clearly also a dark thriller. For western/frontier/cowboy/outlaw requests, strongly prefer titles with western/frontier/cowboy/outlaw/saloon/ranch/frontier-town/old-west signals; generic acclaimed dramas or fantasy should rank low. For Reddit/word-of-mouth/cult/classic requests, prefer cult/beloved/high-rating candidates but still require topic fit. Score each title 0-100. Return JSON only: {\"ranked\":[{\"id\":\"...\",\"score\":87,\"reason\":\"2-5 words\"}]}. Include every supplied id exactly once.",
+              "You are a brutally accurate streaming recommendation ranker. Rank titles for the user's exact taste, not for generic popularity. Use semantic fit first, then audience/critic rating, then original streaming popularity. Strongly demote false positives. If the user asks about a subject such as dogs, chefs, lawyers, vampires, football, cowboys, etc., titles must actually be about or prominently include that subject; generic high-rated shows should rank low. For psychological thrillers, prefer dread, paranoia, obsession, mind games, mystery, crime, horror, sci-fi unease, cults, conspiracies, investigations, dark tension, or unreliable reality. Comedy, sitcom, workplace comedy, reality, talk show, game show, light documentary, or general drama should rank low unless the title is clearly also a dark thriller. For western/frontier/cowboy/outlaw requests, strongly prefer titles with western/frontier/cowboy/outlaw/saloon/ranch/frontier-town/old-west signals; generic acclaimed dramas or fantasy should rank low. For Reddit/word-of-mouth/cult/classic requests, prefer cult/beloved/high-rating candidates but still require topic fit. Score each title 0-100. Return JSON only: {\"ranked\":[{\"id\":\"...\",\"score\":87,\"reason\":\"2-5 words\"}]}. Include every supplied id exactly once. Never write reasons like 'no dogs' or 'no match'.",
           },
           {
             role: "user",
@@ -237,8 +237,14 @@ function addMatchReason(item: Title, preference: string, aiReason = ""): Title {
   const text = `${item.title} ${item.overview} ${item.genres.join(" ")}`.toLowerCase();
   const reasons: string[] = [];
 
-  if (aiReason) {
+  if (aiReason && !/\b(no match|no dogs|no dog|not about|none)\b/i.test(aiReason)) {
     reasons.push(aiReason);
+  }
+
+  const subjectMatch = terms.requiredSubjects.find((subject) => subject.matches.some((term) => text.includes(term)));
+
+  if (subjectMatch && reasons.length < 2) {
+    reasons.push(subjectMatch.reason);
   }
 
   if (terms.requiresTension) {
@@ -327,13 +333,35 @@ function localScore(item: Title, terms: ReturnType<typeof rankTerms>, originalIn
     }
   }
 
+  for (const subject of terms.requiredSubjects) {
+    const hasSubject = subject.matches.some((term) => text.includes(term));
+
+    if (hasSubject) {
+      score += 20;
+    } else {
+      score -= 36;
+    }
+  }
+
   return score;
+}
+
+function subjectScore(item: Title, preference: string) {
+  const terms = rankTerms(preference);
+
+  if (terms.requiredSubjects.length === 0) {
+    return true;
+  }
+
+  const text = `${item.title} ${item.overview} ${item.genres.join(" ")}`.toLowerCase();
+  return terms.requiredSubjects.some((subject) => subject.matches.some((term) => text.includes(term)));
 }
 
 function rankTerms(preference: string) {
   const lower = preference.toLowerCase();
   const positive = new Set<string>();
   const negative = new Set<string>();
+  const requiredSubjects: Array<{ reason: string; matches: string[] }> = [];
   let requiresTension = false;
   let requiresWestern = false;
 
@@ -364,7 +392,12 @@ function rankTerms(preference: string) {
     ["western", "frontier", "cowboy", "outlaw", "saloon"].forEach((term) => positive.add(term));
   }
 
-  return { positive: [...positive], negative: [...negative], requiresTension, requiresWestern };
+  for (const subject of subjectTerms(lower)) {
+    requiredSubjects.push(subject);
+    subject.matches.forEach((term) => positive.add(term));
+  }
+
+  return { positive: [...positive], negative: [...negative], requiresTension, requiresWestern, requiredSubjects };
 }
 
 function preferenceKeywords(preference: string) {
@@ -387,7 +420,69 @@ function preferenceKeywords(preference: string) {
     keywords.add("classic");
   }
 
+  for (const subject of subjectTerms(lower)) {
+    keywords.add(subject.keyword);
+  }
+
   return [...keywords].slice(0, 2);
+}
+
+function subjectTerms(lowerPreference: string) {
+  const terms: Array<{ keyword: string; reason: string; matches: string[] }> = [];
+  const explicit = extractExplicitSubject(lowerPreference);
+
+  if (explicit) {
+    terms.push(subjectFromPhrase(explicit));
+  }
+
+  if (/\bdogs?|canine|pupp(y|ies)\b/.test(lowerPreference)) {
+    terms.push({
+      keyword: "dog",
+      reason: "dog focus",
+      matches: ["dog", "dogs", "canine", "puppy", "puppies"],
+    });
+  }
+
+  return dedupeSubjects(terms);
+}
+
+function extractExplicitSubject(lowerPreference: string) {
+  const match = lowerPreference.match(/\b(?:about|featuring|with|centered on|focused on)\s+([a-z0-9 -]{3,40})/);
+
+  if (!match?.[1]) {
+    return "";
+  }
+
+  return match[1]
+    .replace(/\b(tv|shows?|series|movies?|films?|that|are|is|and|or|but|like|similar|good|best|top)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function subjectFromPhrase(phrase: string) {
+  const keyword = singularize(phrase.split(" ")[0] ?? phrase);
+
+  return {
+    keyword,
+    reason: `${keyword} focus`,
+    matches: [keyword, `${keyword}s`],
+  };
+}
+
+function dedupeSubjects(subjects: Array<{ keyword: string; reason: string; matches: string[] }>) {
+  const seen = new Set<string>();
+
+  return subjects.filter((subject) => {
+    if (!subject.keyword || seen.has(subject.keyword)) {
+      return false;
+    }
+    seen.add(subject.keyword);
+    return true;
+  });
+}
+
+function singularize(value: string) {
+  return value.endsWith("s") && value.length > 3 ? value.slice(0, -1) : value;
 }
 
 async function getServiceCandidates(
@@ -430,9 +525,12 @@ async function getServiceCandidates(
     }
   }
 
+  const mergedItems = [...merged.values()];
+  const subjectMatches = mergedItems.filter((item) => subjectScore(item, preference));
+
   return {
     ...base,
-    items: [...merged.values()],
+    items: subjectMatches.length > 0 ? subjectMatches : mergedItems,
   };
 }
 
@@ -445,6 +543,7 @@ function candidatePools(sort: SortKey, genre: GenreKey, keyword: string, prefere
 
   for (const candidateKeyword of preferenceKeywords(preference)) {
     pools.push({ sort: "popularity_alltime", genre: "all", keyword: candidateKeyword });
+    pools.push({ sort: "rating", genre: "all", keyword: candidateKeyword });
   }
 
   return dedupePools(pools);
