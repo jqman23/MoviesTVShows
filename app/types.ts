@@ -30,6 +30,7 @@ export type Title = {
   poster: string | null;
   link: string | null;
   genres: string[];
+  matchReason?: string;
 };
 
 export type ServiceResult = {

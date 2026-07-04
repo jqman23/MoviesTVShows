@@ -362,6 +362,7 @@ export default function Home() {
                       {item.year ?? "Year N/A"}
                       {item.genres.length ? ` | ${item.genres.join(", ")}` : ""}
                     </p>
+                    {item.matchReason ? <p className="match-reason">{item.matchReason}</p> : null}
                     <p className="overview">{item.overview}</p>
                     {item.link ? (
                       <a href={item.link} target="_blank" rel="noreferrer">

@@ -399,6 +399,13 @@ h3 {
   font-size: 0.86rem;
 }
 
+.match-reason {
+  margin-bottom: 8px;
+  color: #8ed2ff;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .overview {
   display: -webkit-box;
   margin-bottom: 10px;

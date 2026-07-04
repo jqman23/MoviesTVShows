@@ -135,7 +135,7 @@ async function rerankServiceUncached(service: ServiceResult, preference: string)
           {
             role: "system",
             content:
-              "You rerank streaming titles for a user. Use semantic match first, then rating, then original popularity rank. Penalize titles whose genre/overview clearly conflicts with the request. For psychological thrillers, prefer suspense, mystery, crime, horror, sci-fi paranoia, mind-bending, dark, tense, or conspiracy themes. For Reddit/word-of-mouth requests, prefer cult/beloved/high-rating candidates but still require topic fit. Return JSON only: {\"ids\":[\"id1\",\"id2\"]}. Include every supplied id exactly once.",
+              "You rerank streaming titles for a user. Use semantic match first, then rating, then original popularity rank. Penalize titles whose genre/overview clearly conflicts with the request. For psychological thrillers, prefer suspense, crime, horror, sci-fi paranoia, mind-bending, dark, tense, mystery, obsession, paranoia, cult, or conspiracy themes. A comedy, sitcom, workplace comedy, reality show, talk show, or light comedy should rank low for psychological thriller even if it mentions mystery or conspiracy. For Reddit/word-of-mouth requests, prefer cult/beloved/high-rating candidates but still require topic fit. Return JSON only: {\"ids\":[\"id1\",\"id2\"]}. Include every supplied id exactly once.",
           },
           {
             role: "user",
@@ -179,28 +179,73 @@ async function rerankServiceUncached(service: ServiceResult, preference: string)
       return [item];
     });
 
-    return { ...service, items: [...ordered, ...itemMap.values()] };
+    return { ...service, items: guardedRerank([...ordered, ...itemMap.values()], preference) };
   } catch {
     return { ...service, items: locallyRanked };
   }
 }
 
 function localRerank(items: Title[], preference: string) {
+  return guardedRerank(items, preference);
+}
+
+function guardedRerank(items: Title[], preference: string) {
   const terms = rankTerms(preference);
 
   return [...items].sort((a, b) => {
-    const scoreA = localScore(a, terms, items.indexOf(a));
-    const scoreB = localScore(b, terms, items.indexOf(b));
+    const scoreA = localScore(a, terms, items.indexOf(a)) + groqOrderBoost(items.indexOf(a));
+    const scoreB = localScore(b, terms, items.indexOf(b)) + groqOrderBoost(items.indexOf(b));
     return scoreB - scoreA;
-  });
+  }).map((item) => addMatchReason(item, preference));
+}
+
+function groqOrderBoost(index: number) {
+  return Math.max(0, 8 - index) * 0.35;
+}
+
+function addMatchReason(item: Title, preference: string): Title {
+  const terms = rankTerms(preference);
+  const text = `${item.title} ${item.overview} ${item.genres.join(" ")}`.toLowerCase();
+  const reasons: string[] = [];
+
+  if (terms.requiresTension) {
+    if (/\b(psychological|paranoia|obsession|mind|conspiracy|cult)\b/.test(text)) {
+      reasons.push("psych angle");
+    } else if (/\b(thriller|suspense|mystery|crime|dark|tense|murder|killer|detective|investigation)\b/.test(text)) {
+      reasons.push("tense mystery");
+    }
+  }
+
+  const genreMatch = item.genres.find((genre) =>
+    terms.positive.some((term) => genre.toLowerCase().includes(term)),
+  );
+
+  if (genreMatch && reasons.length < 2) {
+    reasons.push(genreMatch);
+  }
+
+  if ((item.rating ?? 0) >= 7.5 && reasons.length < 2) {
+    reasons.push("strong rating");
+  }
+
+  if (reasons.length === 0 && item.genres.length > 0) {
+    reasons.push(item.genres[0]);
+  }
+
+  return {
+    ...item,
+    matchReason: reasons.slice(0, 2).join(" • "),
+  };
 }
 
 function localScore(item: Title, terms: ReturnType<typeof rankTerms>, originalIndex: number) {
   const text = `${item.title} ${item.overview} ${item.genres.join(" ")}`.toLowerCase();
   let score = (item.rating ?? 6) * 2 - originalIndex * 0.15;
+  let positiveMatches = 0;
 
   for (const term of terms.positive) {
     if (text.includes(term)) {
+      positiveMatches += 1;
       score += 4;
     }
   }
@@ -211,6 +256,24 @@ function localScore(item: Title, terms: ReturnType<typeof rankTerms>, originalIn
     }
   }
 
+  if (terms.requiresTension) {
+    const hasTensionSignal =
+      positiveMatches > 0 ||
+      /\b(thriller|suspense|mystery|crime|horror|psychological|paranoia|obsession|mind|dark|tense|conspiracy|cult|murder|killer|detective|investigation)\b/.test(
+        text,
+      );
+    const hasComedyMismatch =
+      /\b(comedy|sitcom|stand-up|workplace|talk show|reality|game show|variety|sketch)\b/.test(text);
+
+    if (!hasTensionSignal) {
+      score -= 12;
+    }
+
+    if (hasComedyMismatch) {
+      score -= hasTensionSignal ? 10 : 18;
+    }
+  }
+
   return score;
 }
 
@@ -218,16 +281,20 @@ function rankTerms(preference: string) {
   const lower = preference.toLowerCase();
   const positive = new Set<string>();
   const negative = new Set<string>();
+  let requiresTension = false;
 
   if (/\bsci|sci-fi|science fiction|space|alien|future|cyberpunk\b/.test(lower)) {
     ["sci", "space", "alien", "future", "robot", "technology"].forEach((term) => positive.add(term));
   }
 
   if (/\bpsych|thrill|throller|thriller|suspense|mind.?bend|paranoia|mystery\b/.test(lower)) {
+    requiresTension = true;
     ["thriller", "suspense", "mystery", "crime", "dark", "mind", "paranoia", "conspiracy"].forEach((term) =>
       positive.add(term),
     );
-    ["comedy", "sitcom", "stand-up", "talk show", "reality"].forEach((term) => negative.add(term));
+    ["comedy", "sitcom", "stand-up", "talk show", "reality", "workplace", "game show", "variety"].forEach((term) =>
+      negative.add(term),
+    );
   }
 
   if (/\bhorror|scary|spooky\b/.test(lower)) {
@@ -238,7 +305,7 @@ function rankTerms(preference: string) {
     ["cult", "classic", "acclaimed"].forEach((term) => positive.add(term));
   }
 
-  return { positive: [...positive], negative: [...negative] };
+  return { positive: [...positive], negative: [...negative], requiresTension };
 }
 
 function getDemoServicesWithFallback(
