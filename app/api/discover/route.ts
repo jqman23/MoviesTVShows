@@ -343,6 +343,29 @@ function rankTerms(preference: string) {
   return { positive: [...positive], negative: [...negative], requiresTension };
 }
 
+function preferenceKeywords(preference: string) {
+  const lower = preference.toLowerCase();
+  const keywords = new Set<string>();
+
+  if (/\bwestern|frontier|cowboy|outlaw|saloon|wild west\b/.test(lower)) {
+    keywords.add("western");
+  }
+
+  if (/\bspace|alien|robot|cyberpunk|future|science fiction|sci-fi\b/.test(lower)) {
+    keywords.add("science fiction");
+  }
+
+  if (/\bpsych|thrill|throller|thriller|suspense|paranoia|mystery\b/.test(lower)) {
+    keywords.add("thriller");
+  }
+
+  if (/\bcult|classic|beloved|underrated|hidden gem\b/.test(lower)) {
+    keywords.add("classic");
+  }
+
+  return [...keywords].slice(0, 2);
+}
+
 async function getServiceCandidates(
   service: (typeof services)[number],
   showType: ShowType,
@@ -356,7 +379,7 @@ async function getServiceCandidates(
     return getServiceWithFallback(service, showType, sort, genre, keyword, apiKey);
   }
 
-  const pools = candidatePools(sort, genre, keyword);
+  const pools = candidatePools(sort, genre, keyword, preference);
   const results = await Promise.allSettled(
     pools.map((pool) => getCachedService(service, showType, pool.sort, pool.genre, pool.keyword, apiKey)),
   );
@@ -389,12 +412,16 @@ async function getServiceCandidates(
   };
 }
 
-function candidatePools(sort: SortKey, genre: GenreKey, keyword: string) {
+function candidatePools(sort: SortKey, genre: GenreKey, keyword: string, preference: string) {
   const pools: Array<{ sort: SortKey; genre: GenreKey; keyword: string }> = [
     { sort, genre, keyword },
     { sort: "rating", genre, keyword: "" },
     { sort: "popularity_alltime", genre: genre === "all" ? "all" : genre, keyword: "" },
   ];
+
+  for (const candidateKeyword of preferenceKeywords(preference)) {
+    pools.push({ sort: "popularity_alltime", genre: "all", keyword: candidateKeyword });
+  }
 
   return dedupePools(pools);
 }
@@ -554,8 +581,26 @@ function normalizeTitle(show: ApiShow, serviceId: ServiceId): Title {
       show.imageSet?.verticalPoster?.w600 ??
       null,
     link: streamingOption?.link ?? null,
-    genres: Array.isArray(show.genres) ? show.genres.slice(0, 3).map(String) : [],
+    genres: normalizeGenres(show.genres),
   };
+}
+
+function normalizeGenres(genres: ApiShow["genres"]) {
+  if (!Array.isArray(genres)) {
+    return [];
+  }
+
+  return genres.slice(0, 3).flatMap((genre) => {
+    if (typeof genre === "string") {
+      return [genre];
+    }
+
+    if (genre && typeof genre === "object" && "name" in genre && typeof genre.name === "string") {
+      return [genre.name];
+    }
+
+    return [];
+  });
 }
 
 function normalizeShowType(value: string | null): ShowType {
@@ -600,7 +645,7 @@ type ApiShow = {
   releaseYear?: number;
   firstAirYear?: number;
   rating?: number;
-  genres?: string[];
+  genres?: Array<string | { name?: string }>;
   imageSet?: {
     verticalPoster?: {
       w240?: string;

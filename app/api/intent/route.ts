@@ -73,7 +73,7 @@ async function getIntent(query: string): Promise<SearchIntent> {
           {
             role: "system",
             content:
-              "Map a streaming search request to JSON only. Allowed showType: movie, series, null. Allowed genre: all, action, animation, comedy, documentary, drama, horror, romance, scifi, thriller. Allowed sort: popularity_1week, popularity_1month, popularity_1year, popularity_alltime, rating, null. Prefer broad filters so the app always shows results. Use rating for best/highly rated/critically acclaimed/people recommend it. Use popularity_alltime for cult favorite, Reddit favorite, people online like it, beloved, or word-of-mouth requests. Use popularity_1week for trending/new/popular right now. If multiple genres are requested, choose the strongest concrete genre; for sci-fi plus psychological thriller, choose scifi unless thriller is clearly primary. Leave keyword empty unless the request clearly names a specific title, franchise, actor, director, or unique subject. Do not put Reddit, generic moods, plot vibes, adjectives, runtimes, or broad requests in keyword.",
+              "Map a streaming search request to JSON only. Allowed showType: movie, series, null. Allowed genre: all, action, animation, comedy, documentary, drama, horror, romance, scifi, thriller. Allowed sort: popularity_1week, popularity_1month, popularity_1year, popularity_alltime, rating, null. Prefer broad filters so the app always shows results. Use rating for best/highly rated/critically acclaimed/people recommend it. Use popularity_alltime for cult favorite, Reddit favorite, people online like it, beloved, classic, or word-of-mouth requests. Use popularity_1week for trending/new/popular right now. If multiple genres are requested, choose the strongest concrete genre; for sci-fi plus psychological thriller, choose scifi unless thriller is clearly primary. Leave keyword empty unless the user is directly asking for a specific title/person/franchise. If the phrase says 'like X' or 'similar to X', treat X as a reference for taste, not a keyword filter. Do not put Reddit, generic moods, plot vibes, adjectives, runtimes, references, or broad requests in keyword.",
           },
           {
             role: "user",
@@ -156,7 +156,7 @@ function keepSpecificKeyword(keyword: string) {
   }
 
   if (
-    /\b(vibe|vibes|mood|something|anything|about|with|for|like|fun|good|great|short|long|easy|smart|dark|light|cozy|intense|violent|family|kids|adult|date|night|mindless|interesting|underrated|popular|reddit|people|recommend)\b/.test(
+    /\b(vibe|vibes|mood|something|anything|about|with|for|like|similar|similar to|fun|good|great|short|long|easy|smart|dark|light|cozy|intense|violent|family|kids|adult|date|night|mindless|interesting|underrated|popular|reddit|people|recommend)\b/.test(
       lower,
     )
   ) {
