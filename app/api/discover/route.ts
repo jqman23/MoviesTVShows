@@ -50,7 +50,7 @@ export async function GET(request: Request) {
   const genre = normalizeGenre(searchParams.get("genre"));
   const keyword = normalizeKeyword(searchParams.get("keyword"));
   const apiKey = process.env.STREAMING_AVAILABILITY_API_KEY;
-  const demoServices = getDemoServices(showType, sort, genre, keyword);
+  const demoServices = getDemoServicesWithFallback(showType, sort, genre, keyword);
 
   if (!apiKey) {
     return cachedJson({
@@ -62,7 +62,7 @@ export async function GET(request: Request) {
   }
 
   const liveResults = await Promise.allSettled(
-    services.map((service) => getCachedService(service, showType, sort, genre, keyword, apiKey)),
+    services.map((service) => getServiceWithFallback(service, showType, sort, genre, keyword, apiKey)),
   );
 
   let hadFailure = false;
@@ -82,6 +82,66 @@ export async function GET(request: Request) {
       : "Live Streaming Availability API results for US catalogs.",
     services: resolved,
   });
+}
+
+function getDemoServicesWithFallback(
+  showType: ShowType,
+  sort: SortKey,
+  genre: GenreKey,
+  keyword: string,
+) {
+  const exact = getDemoServices(showType, sort, genre, keyword);
+
+  return exact.map((service) => {
+    if (service.items.length > 0) {
+      return service;
+    }
+
+    const withoutKeyword = getDemoServices(showType, sort, genre, "").find(
+      (fallback) => fallback.id === service.id,
+    );
+
+    if (withoutKeyword && withoutKeyword.items.length > 0) {
+      return withoutKeyword;
+    }
+
+    return (
+      getDemoServices(showType, sort, "all", "").find((fallback) => fallback.id === service.id) ??
+      service
+    );
+  });
+}
+
+async function getServiceWithFallback(
+  service: (typeof services)[number],
+  showType: ShowType,
+  sort: SortKey,
+  genre: GenreKey,
+  keyword: string,
+  apiKey: string,
+) {
+  const attempts: Array<{ genre: GenreKey; keyword: string }> = [
+    { genre, keyword },
+    { genre, keyword: "" },
+    { genre: "all", keyword: "" },
+  ];
+
+  for (const attempt of attempts) {
+    const result = await getCachedService(
+      service,
+      showType,
+      sort,
+      attempt.genre,
+      attempt.keyword,
+      apiKey,
+    );
+
+    if (result.items.length > 0) {
+      return result;
+    }
+  }
+
+  return getCachedService(service, showType, sort, "all", "", apiKey);
 }
 
 function getCachedService(

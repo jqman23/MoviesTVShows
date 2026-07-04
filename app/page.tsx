@@ -322,7 +322,7 @@ export default function Home() {
                 Rotten Tomatoes browse list
               </a>
               {visibleItems.length === 0 ? (
-                <p className="empty">No matches for this page.</p>
+                <p className="empty">Open a broader page of picks.</p>
               ) : null}
               {visibleItems.map((item, index) => (
                 <article className="title" key={item.id}>

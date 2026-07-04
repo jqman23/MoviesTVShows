@@ -73,7 +73,7 @@ async function getIntent(query: string): Promise<SearchIntent> {
           {
             role: "system",
             content:
-              "Map a streaming search request to JSON only. Allowed showType: movie, series, null. Allowed genre: all, action, animation, comedy, documentary, drama, horror, romance, scifi, thriller. Allowed sort: popularity_1week, popularity_1month, popularity_1year, popularity_alltime, rating, null. Use rating for best/highly rated/critically acclaimed. Use popularity_1week for trending/new/popular right now. Keyword should keep only specific title, actor, franchise, mood, setting, or plot terms not already captured by type/genre/sort.",
+              "Map a streaming search request to JSON only. Allowed showType: movie, series, null. Allowed genre: all, action, animation, comedy, documentary, drama, horror, romance, scifi, thriller. Allowed sort: popularity_1week, popularity_1month, popularity_1year, popularity_alltime, rating, null. Prefer broad filters so the app always shows results. Use rating for best/highly rated/critically acclaimed/people recommend it. Use popularity_alltime for cult favorite, Reddit favorite, people online like it, beloved, or word-of-mouth requests. Use popularity_1week for trending/new/popular right now. If multiple genres are requested, choose the strongest concrete genre; for sci-fi plus psychological thriller, choose scifi unless thriller is clearly primary. Leave keyword empty unless the request clearly names a specific title, franchise, actor, director, or unique subject. Do not put Reddit, generic moods, plot vibes, adjectives, runtimes, or broad requests in keyword.",
           },
           {
             role: "user",
@@ -106,13 +106,18 @@ function fallbackIntent(query: string): SearchIntent {
   const genre =
     matchGenre(lower, "sci-fi", "scifi") ??
     matchGenre(lower, "science fiction", "scifi") ??
+    matchGenre(lower, "psychological thriller", "thriller") ??
     genres.find((candidate) => candidate !== "all" && lower.includes(candidate)) ??
     (/\bfunny|laugh|sitcom\b/.test(lower) ? "comedy" : null) ??
     (/\bscary|spooky\b/.test(lower) ? "horror" : null) ??
     (/\blove|date night\b/.test(lower) ? "romance" : null) ??
     "all";
 
-  const sort: SortKey | null = /\bbest|highest|rated|critically|score\b/.test(lower)
+  const sort: SortKey | null = /\breddit|word of mouth|word-of-mouth|cult|beloved|people like|people recommend|online like\b/.test(
+    lower,
+  )
+    ? "popularity_alltime"
+    : /\bbest|highest|rated|critically|score|recommend|recommended\b/.test(lower)
     ? "rating"
     : /\bclassic|all time|all-time\b/.test(lower)
       ? "popularity_alltime"
@@ -123,11 +128,12 @@ function fallbackIntent(query: string): SearchIntent {
   const keyword = lower
     .replace(/\b(movie|movies|film|films|tv|show|shows|series|season|episode)\b/g, "")
     .replace(/\b(best|highest|rated|critically|score|new|trending|popular|tonight|right now)\b/g, "")
-    .replace(/\b(action|animation|comedy|documentary|drama|horror|romance|thriller|scifi|sci-fi|science fiction)\b/g, "")
+    .replace(/\b(reddit|word of mouth|word-of-mouth|cult|beloved|people like|people recommend|online like|recommend|recommended)\b/g, "")
+    .replace(/\b(action|animation|comedy|documentary|drama|horror|romance|thriller|psychological thriller|scifi|sci-fi|science fiction)\b/g, "")
     .replace(/\s+/g, " ")
     .trim();
 
-  return { showType, genre, sort, keyword };
+  return { showType, genre, sort, keyword: keepSpecificKeyword(keyword) };
 }
 
 function normalizeIntent(intent: Partial<SearchIntent>, originalQuery: string): SearchIntent {
@@ -135,9 +141,29 @@ function normalizeIntent(intent: Partial<SearchIntent>, originalQuery: string): 
   const genre = genres.includes(intent.genre as GenreKey) ? (intent.genre as GenreKey) : "all";
   const sort = sorts.includes(intent.sort as SortKey) ? (intent.sort as SortKey) : null;
   const keyword =
-    typeof intent.keyword === "string" ? intent.keyword.trim().slice(0, 80) : fallbackIntent(originalQuery).keyword;
+    typeof intent.keyword === "string"
+      ? keepSpecificKeyword(intent.keyword.trim().slice(0, 80))
+      : fallbackIntent(originalQuery).keyword;
 
   return { showType, genre, sort, keyword };
+}
+
+function keepSpecificKeyword(keyword: string) {
+  const lower = keyword.toLowerCase();
+
+  if (!keyword || keyword.length < 3) {
+    return "";
+  }
+
+  if (
+    /\b(vibe|vibes|mood|something|anything|about|with|for|like|fun|good|great|short|long|easy|smart|dark|light|cozy|intense|violent|family|kids|adult|date|night|mindless|interesting|underrated|popular|reddit|people|recommend)\b/.test(
+      lower,
+    )
+  ) {
+    return "";
+  }
+
+  return keyword;
 }
 
 function matchGenre(input: string, phrase: string, genre: GenreKey) {
