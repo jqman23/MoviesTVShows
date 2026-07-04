@@ -42,7 +42,8 @@ The app still runs without an API key and will show demo data.
 1. Import this repository into Vercel.
 2. Add an environment variable named `STREAMING_AVAILABILITY_API_KEY`.
 3. Set the value to your Streaming Availability API key.
-4. Deploy.
+4. Confirm the framework preset is Next.js. This repo also includes `vercel.json` so Vercel uses `.next` instead of a static `public` output directory.
+5. Deploy.
 
 The frontend calls `/api/discover`. That server route reads `process.env.STREAMING_AVAILABILITY_API_KEY` and sends the key only in the server-side request header to `https://api.movieofthenight.com/v4`.
 
