@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
 import { unstable_cache } from "next/cache";
 import { getDemoServices } from "../../data/demo";
-import type { DiscoverResponse, ServiceId, ServiceResult, ShowType, SortKey, Title } from "../../types";
+import type {
+  DiscoverResponse,
+  GenreKey,
+  ServiceId,
+  ServiceResult,
+  ShowType,
+  SortKey,
+  Title,
+} from "../../types";
 
 const API_BASE = "https://api.movieofthenight.com/v4";
 const COUNTRY = "us";
@@ -22,12 +30,27 @@ const sortKeys: SortKey[] = [
   "rating",
 ];
 
+const genreKeys: GenreKey[] = [
+  "all",
+  "action",
+  "animation",
+  "comedy",
+  "documentary",
+  "drama",
+  "horror",
+  "romance",
+  "scifi",
+  "thriller",
+];
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const showType = normalizeShowType(searchParams.get("type"));
   const sort = normalizeSort(searchParams.get("sort"));
+  const genre = normalizeGenre(searchParams.get("genre"));
+  const keyword = normalizeKeyword(searchParams.get("keyword"));
   const apiKey = process.env.STREAMING_AVAILABILITY_API_KEY;
-  const demoServices = getDemoServices(showType, sort);
+  const demoServices = getDemoServices(showType, sort, genre, keyword);
 
   if (!apiKey) {
     return cachedJson({
@@ -39,7 +62,7 @@ export async function GET(request: Request) {
   }
 
   const liveResults = await Promise.allSettled(
-    services.map((service) => getCachedService(service, showType, sort, apiKey)),
+    services.map((service) => getCachedService(service, showType, sort, genre, keyword, apiKey)),
   );
 
   let hadFailure = false;
@@ -65,14 +88,16 @@ function getCachedService(
   service: (typeof services)[number],
   showType: ShowType,
   sort: SortKey,
+  genre: GenreKey,
+  keyword: string,
   apiKey: string,
 ) {
   return unstable_cache(
-    () => fetchService(service, showType, sort, apiKey),
-    [COUNTRY, service.id, showType, sort],
+    () => fetchService(service, showType, sort, genre, keyword, apiKey),
+    [COUNTRY, service.id, showType, sort, genre, keyword || "any-keyword"],
     {
       revalidate: CACHE_SECONDS,
-      tags: [`discover-${COUNTRY}-${service.id}-${showType}-${sort}`],
+      tags: [`discover-${COUNTRY}-${service.id}-${showType}-${sort}-${genre}-${keyword || "any"}`],
     },
   )();
 }
@@ -81,6 +106,8 @@ async function fetchService(
   service: (typeof services)[number],
   showType: ShowType,
   sort: SortKey,
+  genre: GenreKey,
+  keyword: string,
   apiKey: string,
 ): Promise<ServiceResult> {
   const url = new URL(`${API_BASE}/shows/search/filters`);
@@ -90,6 +117,12 @@ async function fetchService(
   url.searchParams.set("order_by", sort);
   url.searchParams.set("order_direction", "desc");
   url.searchParams.set("output_language", "en");
+  if (genre !== "all") {
+    url.searchParams.set("genres", genre);
+  }
+  if (keyword) {
+    url.searchParams.set("keyword", keyword);
+  }
 
   const response = await fetch(url, {
     headers: {
@@ -98,7 +131,7 @@ async function fetchService(
     },
     next: {
       revalidate: CACHE_SECONDS,
-      tags: [`streaming-availability-${COUNTRY}-${service.id}-${showType}-${sort}`],
+      tags: [`streaming-availability-${COUNTRY}-${service.id}-${showType}-${sort}-${genre}-${keyword || "any"}`],
     },
   });
 
@@ -112,7 +145,7 @@ async function fetchService(
     id: service.id,
     name: service.name,
     accent: service.accent,
-    items: (payload.shows ?? []).slice(0, 8).map((show) => normalizeTitle(show, service.id)),
+    items: (payload.shows ?? []).slice(0, 20).map((show) => normalizeTitle(show, service.id)),
   };
 }
 
@@ -143,6 +176,14 @@ function normalizeShowType(value: string | null): ShowType {
 
 function normalizeSort(value: string | null): SortKey {
   return sortKeys.includes(value as SortKey) ? (value as SortKey) : "popularity_1week";
+}
+
+function normalizeGenre(value: string | null): GenreKey {
+  return genreKeys.includes(value as GenreKey) ? (value as GenreKey) : "all";
+}
+
+function normalizeKeyword(value: string | null) {
+  return (value ?? "").trim().slice(0, 80);
 }
 
 type ApiShow = {

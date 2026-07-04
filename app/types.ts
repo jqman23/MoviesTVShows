@@ -7,6 +7,18 @@ export type SortKey =
   | "popularity_alltime"
   | "rating";
 
+export type GenreKey =
+  | "all"
+  | "action"
+  | "animation"
+  | "comedy"
+  | "documentary"
+  | "drama"
+  | "horror"
+  | "romance"
+  | "scifi"
+  | "thriller";
+
 export type ServiceId = "netflix" | "hbo" | "peacock" | "hulu";
 
 export type Title = {

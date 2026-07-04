@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { DiscoverResponse, ShowType, SortKey } from "./types";
+import { type CSSProperties, type FormEvent, useEffect, useMemo, useState } from "react";
+import type { DiscoverResponse, GenreKey, ShowType, SortKey } from "./types";
 
 const responseCache = new Map<string, DiscoverResponse>();
+const pageSize = 8;
 
 const sortOptions: Array<{ value: SortKey; label: string }> = [
   { value: "popularity_1week", label: "Past week" },
@@ -13,17 +14,59 @@ const sortOptions: Array<{ value: SortKey; label: string }> = [
   { value: "rating", label: "Rating" },
 ];
 
+const genreOptions: Array<{ value: GenreKey; label: string }> = [
+  { value: "all", label: "All genres" },
+  { value: "action", label: "Action" },
+  { value: "animation", label: "Animation" },
+  { value: "comedy", label: "Comedy" },
+  { value: "documentary", label: "Documentary" },
+  { value: "drama", label: "Drama" },
+  { value: "horror", label: "Horror" },
+  { value: "romance", label: "Romance" },
+  { value: "scifi", label: "Sci-Fi" },
+  { value: "thriller", label: "Thriller" },
+];
+
+const rottenTomatoesLinks = {
+  netflix: "https://www.rottentomatoes.com/browse/movies_at_home/affiliates:netflix~sort:popular",
+  hbo: "https://www.rottentomatoes.com/browse/movies_at_home/affiliates:max~sort:popular",
+  peacock: "https://www.rottentomatoes.com/browse/movies_at_home/affiliates:peacock~sort:popular",
+  hulu: "https://www.rottentomatoes.com/browse/movies_at_home/affiliates:hulu~sort:popular",
+};
+
 export default function Home() {
   const [showType, setShowType] = useState<ShowType>("movie");
   const [sort, setSort] = useState<SortKey>("popularity_1week");
+  const [genre, setGenre] = useState<GenreKey>("all");
+  const [keywordInput, setKeywordInput] = useState("");
+  const [keyword, setKeyword] = useState("");
+  const [currentPage, setCurrentPage] = useState(0);
   const [data, setData] = useState<DiscoverResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [collapsedServices, setCollapsedServices] = useState<Set<string>>(
+    () => new Set(["netflix", "hbo", "peacock", "hulu"]),
+  );
 
   const query = useMemo(() => {
-    const params = new URLSearchParams({ type: showType, sort });
+    const params = new URLSearchParams({ type: showType, sort, genre });
+    if (keyword) {
+      params.set("keyword", keyword);
+    }
+
     return params.toString();
-  }, [showType, sort]);
+  }, [genre, keyword, showType, sort]);
+
+  const maxPage = useMemo(() => {
+    if (!data) {
+      return 0;
+    }
+
+    return Math.max(
+      0,
+      ...data.services.map((service) => Math.ceil(service.items.length / pageSize) - 1),
+    );
+  }, [data]);
 
   useEffect(() => {
     let isMounted = true;
@@ -70,15 +113,42 @@ export default function Home() {
     };
   }, [query]);
 
+  function toggleService(serviceId: string) {
+    setCollapsedServices((current) => {
+      const next = new Set(current);
+
+      if (next.has(serviceId)) {
+        next.delete(serviceId);
+      } else {
+        next.add(serviceId);
+      }
+
+      return next;
+    });
+  }
+
+  function submitSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCurrentPage(0);
+    setKeyword(keywordInput.trim());
+  }
+
+  const boundedPage = Math.min(currentPage, maxPage);
+  const pageStart = boundedPage * pageSize;
+  const pageEnd = pageStart + pageSize;
+  const largestResultCount = data
+    ? Math.max(0, ...data.services.map((service) => service.items.length))
+    : 0;
+  const shouldShowStatus = Boolean(error || (data && data.source !== "live"));
+
   return (
     <main className="shell">
       <section className="hero" aria-labelledby="page-title">
         <div>
           <p className="eyebrow">MoviesTVShows</p>
-          <h1 id="page-title">Top US streaming picks by service</h1>
+          <h1 id="page-title">Find what to watch</h1>
           <p className="lede">
-            Compare leading movies and TV shows on Netflix, HBO/Max, Peacock, and Hulu with
-            live Streaming Availability data when the server API key is configured.
+            Browse top US movies and TV shows by service, genre, rating, and popularity.
           </p>
         </div>
 
@@ -93,52 +163,139 @@ export default function Home() {
         <div className="segmented" aria-label="Title type">
           <button
             className={showType === "movie" ? "active" : ""}
-            onClick={() => setShowType("movie")}
+            onClick={() => {
+              setCurrentPage(0);
+              setShowType("movie");
+            }}
             type="button"
           >
             Movies
           </button>
           <button
             className={showType === "series" ? "active" : ""}
-            onClick={() => setShowType("series")}
+            onClick={() => {
+              setCurrentPage(0);
+              setShowType("series");
+            }}
             type="button"
           >
             TV Shows
           </button>
         </div>
 
-        <label className="select-label">
-          Sort
-          <select value={sort} onChange={(event) => setSort(event.target.value as SortKey)}>
-            {sortOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </section>
+        <div className="filters">
+          <label className="select-label">
+            Sort
+            <select
+              value={sort}
+              onChange={(event) => {
+                setCurrentPage(0);
+                setSort(event.target.value as SortKey);
+              }}
+            >
+              {sortOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
 
-      <div className={`notice ${data?.source ?? "demo"}`} role="status" aria-live="polite">
-        {isLoading ? "Loading catalog results..." : data?.message}
-        {error ? <span>{error}</span> : null}
-      </div>
+          <label className="select-label">
+            Genre
+            <select
+              value={genre}
+              onChange={(event) => {
+                setCurrentPage(0);
+                setGenre(event.target.value as GenreKey);
+              }}
+            >
+              {genreOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <form className="search" onSubmit={submitSearch}>
+          <label htmlFor="keyword">Search</label>
+          <input
+            id="keyword"
+            onChange={(event) => setKeywordInput(event.target.value)}
+            placeholder="Title or keyword"
+            type="search"
+            value={keywordInput}
+          />
+          <button type="submit">Go</button>
+        </form>
+      </section>
 
       {isLoading && !data ? <SkeletonGrid /> : null}
 
+      {data && largestResultCount > 0 ? (
+        <div className="page-controls" aria-label="Result pages">
+          <button
+            disabled={boundedPage === 0}
+            onClick={() => setCurrentPage((page) => Math.max(0, page - 1))}
+            type="button"
+          >
+            Previous 8
+          </button>
+          <span>
+            {pageStart + 1}-{Math.min(pageEnd, largestResultCount)}
+          </span>
+          <button
+            disabled={boundedPage >= maxPage}
+            onClick={() => setCurrentPage((page) => Math.min(maxPage, page + 1))}
+            type="button"
+          >
+            Next 8
+          </button>
+        </div>
+      ) : null}
+
       <section className="service-grid" aria-label="Streaming service results">
-        {data?.services.map((service) => (
-          <article className="service" key={service.id} style={{ "--accent": service.accent } as React.CSSProperties}>
-            <div className="service-header">
+        {data?.services.map((service) => {
+          const isCollapsed = collapsedServices.has(service.id);
+          const panelId = `${service.id}-titles`;
+          const visibleItems = service.items.slice(pageStart, pageEnd);
+
+          return (
+            <article
+              className={`service ${isCollapsed ? "collapsed" : ""}`}
+              key={service.id}
+              style={{ "--accent": service.accent } as CSSProperties}
+            >
+            <button
+              aria-controls={panelId}
+              aria-expanded={!isCollapsed}
+              className="service-header"
+              onClick={() => toggleService(service.id)}
+              type="button"
+            >
               <div>
                 <p>Top {showType === "movie" ? "movies" : "TV shows"}</p>
                 <h2>{service.name}</h2>
               </div>
-              <span>{service.items.length}</span>
-            </div>
+              <span className="count">{service.items.length}</span>
+              <span className="chevron" aria-hidden="true" />
+            </button>
 
-            <div className="titles">
-              {service.items.map((item, index) => (
+            <div className="titles" id={panelId}>
+              <a
+                className="rt-link"
+                href={rottenTomatoesLinks[service.id]}
+                rel="noreferrer"
+                target="_blank"
+              >
+                Rotten Tomatoes browse list
+              </a>
+              {visibleItems.length === 0 ? (
+                <p className="empty">No matches for this page.</p>
+              ) : null}
+              {visibleItems.map((item, index) => (
                 <article className="title" key={item.id}>
                   <div className="poster">
                     {item.poster ? (
@@ -149,11 +306,14 @@ export default function Home() {
                     )}
                   </div>
                   <div className="title-copy">
-                    <div className="rank">#{index + 1}</div>
-                    <h3>{item.title}</h3>
+                    <div className="rank">#{pageStart + index + 1}</div>
+                    <div className="title-row">
+                      <h3>{item.title}</h3>
+                      {item.rating ? <span>{item.rating.toFixed(1)}</span> : null}
+                    </div>
                     <p className="meta">
                       {item.year ?? "Year N/A"}
-                      {item.rating ? ` | ${item.rating.toFixed(1)} rating` : ""}
+                      {item.genres.length ? ` | ${item.genres.join(", ")}` : ""}
                     </p>
                     <p className="overview">{item.overview}</p>
                     {item.link ? (
@@ -166,8 +326,15 @@ export default function Home() {
               ))}
             </div>
           </article>
-        ))}
+          );
+        })}
       </section>
+
+      {shouldShowStatus ? (
+        <div className={`notice ${data?.source ?? "demo"}`} role="status" aria-live="polite">
+          {error ? <span>{error}</span> : data?.message}
+        </div>
+      ) : null}
     </main>
   );
 }

@@ -26,6 +26,7 @@ body {
 }
 
 button,
+input,
 select {
   font: inherit;
 }
@@ -141,13 +142,74 @@ h1 {
   color: var(--muted);
 }
 
-select {
+.filters {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+select,
+input {
   min-height: 44px;
   padding: 0 40px 0 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text);
   background: #10141a;
+}
+
+input {
+  min-width: 180px;
+  padding-right: 14px;
+}
+
+.search {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.search label {
+  color: var(--muted);
+}
+
+.search button,
+.page-controls button {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: #071019;
+  background: var(--text);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.search button {
+  padding: 0 16px;
+}
+
+.page-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  margin: 16px 0;
+}
+
+.page-controls button {
+  padding: 0 14px;
+}
+
+.page-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.page-controls span {
+  min-width: 56px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.9rem;
 }
 
 .notice {
@@ -191,8 +253,18 @@ select {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  width: 100%;
   padding: 18px;
+  border: 0;
   border-bottom: 1px solid var(--line);
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  cursor: default;
+}
+
+button.service-header {
+  appearance: none;
 }
 
 .service-header p {
@@ -207,9 +279,10 @@ select {
   font-size: 1.35rem;
 }
 
-.service-header span {
+.service-header .count {
   display: grid;
   place-items: center;
+  flex: 0 0 auto;
   width: 34px;
   height: 34px;
   border-radius: 999px;
@@ -218,8 +291,19 @@ select {
   font-weight: 700;
 }
 
+.chevron {
+  display: none;
+}
+
 .titles {
   display: grid;
+}
+
+.rt-link {
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+  color: #ffd23f;
+  font-size: 0.86rem;
 }
 
 .title {
@@ -270,6 +354,27 @@ h3 {
   margin-bottom: 6px;
   font-size: 1rem;
   line-height: 1.25;
+}
+
+.title-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.title-row h3 {
+  margin-bottom: 6px;
+}
+
+.title-row span {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: #071019;
+  background: #ffd23f;
+  font-size: 0.78rem;
+  font-weight: 800;
 }
 
 .meta {
@@ -352,17 +457,36 @@ a:hover {
 
 @media (max-width: 760px) {
   .shell {
-    padding: 18px;
+    padding: 10px;
   }
 
   .hero {
     grid-template-columns: 1fr;
-    padding-top: 24px;
+    gap: 0;
+    padding: 8px 0 10px;
+  }
+
+  .eyebrow {
+    margin-bottom: 4px;
+    font-size: 0.68rem;
+  }
+
+  h1 {
+    margin-bottom: 0;
+    font-size: 1.85rem;
+    line-height: 1.05;
+  }
+
+  .lede,
+  .hero-panel {
+    display: none;
   }
 
   .toolbar {
     align-items: stretch;
     flex-direction: column;
+    gap: 8px;
+    padding: 8px;
     position: static;
   }
 
@@ -372,22 +496,101 @@ a:hover {
 
   .segmented button {
     min-width: 0;
+    min-height: 36px;
   }
 
   .select-label {
-    align-items: flex-start;
-    flex-direction: column;
+    gap: 6px;
+    flex: 1 1 0;
+    font-size: 0.76rem;
   }
 
-  select {
+  .filters {
+    gap: 8px;
+  }
+
+  select,
+  input {
+    min-height: 38px;
     width: 100%;
+    padding-left: 10px;
+  }
+
+  .search {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+  }
+
+  .search label {
+    display: none;
+  }
+
+  .search button,
+  .page-controls button {
+    min-height: 38px;
+  }
+
+  .page-controls {
+    justify-content: space-between;
+    margin: 8px 0;
   }
 
   .service-grid {
     grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .service-header {
+    padding: 12px;
+  }
+
+  .service-header h2 {
+    font-size: 1.08rem;
+  }
+
+  .service-header p {
+    margin-bottom: 3px;
+    font-size: 0.68rem;
+  }
+
+  button.service-header {
+    cursor: pointer;
+  }
+
+  .service-header .count {
+    margin-left: auto;
+  }
+
+  .chevron {
+    display: block;
+    flex: 0 0 auto;
+    width: 10px;
+    height: 10px;
+    border-right: 2px solid var(--muted);
+    border-bottom: 2px solid var(--muted);
+    transform: rotate(45deg);
+    transition: transform 160ms ease;
+  }
+
+  .service:not(.collapsed) .chevron {
+    transform: rotate(225deg);
+  }
+
+  .service.collapsed .titles {
+    display: none;
+  }
+
+  .service.collapsed .service-header {
+    border-bottom: 0;
   }
 
   .title {
     grid-template-columns: 72px minmax(0, 1fr);
+    padding: 12px;
+  }
+
+  .rt-link {
+    padding: 10px 12px;
   }
 }
