@@ -59,7 +59,7 @@ country + service + type + sort window
 
 Responses are cached for six hours with Vercel/CDN `s-maxage` headers and server-side Next.js cache entries. The browser also reuses previously loaded filter combinations during the current session, so switching back to an already loaded view does not call the app API again.
 
-Natural-language search calls Groq only when the user submits the search form. The server caches each interpreted phrase for 24 hours, and the browser also reuses repeated phrases during the same session. The original phrase is also used to rerank each service's candidate titles by semantic fit, rating, and original popularity rank. If Groq is unavailable, a local scorer still reranks broad candidates so the app keeps showing results.
+Natural-language search calls Groq only when the user submits the search form. The server caches each interpreted phrase for 24 hours, and the browser also reuses repeated phrases during the same session. The original phrase is also used to build a bounded broader candidate pool per service, then rerank those titles by semantic fit, rating, original popularity rank, and model score. If Groq is unavailable, a local scorer still reranks broad candidates so the app keeps showing results.
 
 ## Commands
 

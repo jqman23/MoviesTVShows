@@ -14,8 +14,9 @@ import type {
 const API_BASE = "https://api.movieofthenight.com/v4";
 const GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions";
 const COUNTRY = "us";
-const CACHE_SECONDS = 60 * 60 * 6;
+const CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_CACHE_SECONDS = 60 * 60 * 24;
+const RERANK_MODEL = "llama-3.3-70b-versatile";
 
 const services: Array<{ id: ServiceId; name: string; catalog: string; accent: string }> = [
   { id: "netflix", name: "Netflix", catalog: "netflix.subscription", accent: "#e50914" },
@@ -65,7 +66,9 @@ export async function GET(request: Request) {
   }
 
   const liveResults = await Promise.allSettled(
-    services.map((service) => getServiceWithFallback(service, showType, sort, genre, keyword, apiKey)),
+    services.map((service) =>
+      getServiceCandidates(service, showType, sort, genre, keyword, preference, apiKey),
+    ),
   );
 
   let hadFailure = false;
@@ -127,15 +130,15 @@ async function rerankServiceUncached(service: ServiceResult, preference: string)
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "llama-3.1-8b-instant",
+        model: RERANK_MODEL,
         temperature: 0,
-        max_tokens: 420,
+        max_tokens: 1200,
         response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
             content:
-              "You rerank streaming titles for a user. Use semantic match first, then rating, then original popularity rank. Penalize titles whose genre/overview clearly conflicts with the request. For psychological thrillers, prefer suspense, crime, horror, sci-fi paranoia, mind-bending, dark, tense, mystery, obsession, paranoia, cult, or conspiracy themes. A comedy, sitcom, workplace comedy, reality show, talk show, or light comedy should rank low for psychological thriller even if it mentions mystery or conspiracy. For Reddit/word-of-mouth requests, prefer cult/beloved/high-rating candidates but still require topic fit. Return JSON only: {\"ids\":[\"id1\",\"id2\"]}. Include every supplied id exactly once.",
+              "You are a brutally accurate streaming recommendation ranker. Rank titles for the user's exact taste, not for generic popularity. Use semantic fit first, then audience/critic rating, then original streaming popularity. Strongly demote false positives. For psychological thrillers, prefer dread, paranoia, obsession, mind games, mystery, crime, horror, sci-fi unease, cults, conspiracies, investigations, dark tension, or unreliable reality. Comedy, sitcom, workplace comedy, reality, talk show, game show, light documentary, or general drama should rank low unless the title is clearly also a dark thriller. For Reddit/word-of-mouth requests, prefer cult/beloved/high-rating candidates but still require topic fit. Score each title 0-100. Return JSON only: {\"ranked\":[{\"id\":\"...\",\"score\":87,\"reason\":\"2-5 words\"}]}. Include every supplied id exactly once.",
           },
           {
             role: "user",
@@ -167,8 +170,21 @@ async function rerankServiceUncached(service: ServiceResult, preference: string)
 
     const payload = (await response.json()) as GroqResponse;
     const content = payload.choices?.[0]?.message?.content ?? "";
-    const parsed = JSON.parse(content) as { ids?: string[] };
-    const orderedIds = Array.isArray(parsed.ids) ? parsed.ids : [];
+    const parsed = JSON.parse(content) as { ranked?: Array<{ id?: string; score?: number; reason?: string }> };
+    const ranked = Array.isArray(parsed.ranked) ? parsed.ranked : [];
+    const aiScores = new Map(
+      ranked
+        .filter((entry) => typeof entry.id === "string")
+        .map((entry, index) => [
+          entry.id as string,
+          {
+            score: clampScore(entry.score),
+            reason: typeof entry.reason === "string" ? entry.reason.slice(0, 48) : "",
+            index,
+          },
+        ]),
+    );
+    const orderedIds = ranked.flatMap((entry) => (typeof entry.id === "string" ? [entry.id] : []));
     const itemMap = new Map(locallyRanked.map((item) => [item.id, item]));
     const ordered = orderedIds.flatMap((id) => {
       const item = itemMap.get(id);
@@ -179,7 +195,7 @@ async function rerankServiceUncached(service: ServiceResult, preference: string)
       return [item];
     });
 
-    return { ...service, items: guardedRerank([...ordered, ...itemMap.values()], preference) };
+    return { ...service, items: guardedRerank([...ordered, ...itemMap.values()], preference, aiScores) };
   } catch {
     return { ...service, items: locallyRanked };
   }
@@ -189,24 +205,39 @@ function localRerank(items: Title[], preference: string) {
   return guardedRerank(items, preference);
 }
 
-function guardedRerank(items: Title[], preference: string) {
+function guardedRerank(
+  items: Title[],
+  preference: string,
+  aiScores = new Map<string, { score: number; reason: string; index: number }>(),
+) {
   const terms = rankTerms(preference);
 
   return [...items].sort((a, b) => {
-    const scoreA = localScore(a, terms, items.indexOf(a)) + groqOrderBoost(items.indexOf(a));
-    const scoreB = localScore(b, terms, items.indexOf(b)) + groqOrderBoost(items.indexOf(b));
+    const scoreA = combinedScore(a, terms, items.indexOf(a), aiScores.get(a.id));
+    const scoreB = combinedScore(b, terms, items.indexOf(b), aiScores.get(b.id));
     return scoreB - scoreA;
-  }).map((item) => addMatchReason(item, preference));
+  }).map((item) => addMatchReason(item, preference, aiScores.get(item.id)?.reason));
 }
 
-function groqOrderBoost(index: number) {
-  return Math.max(0, 8 - index) * 0.35;
+function combinedScore(
+  item: Title,
+  terms: ReturnType<typeof rankTerms>,
+  originalIndex: number,
+  aiScore?: { score: number; index: number },
+) {
+  const local = localScore(item, terms, originalIndex);
+  const ai = aiScore ? aiScore.score * 0.42 + Math.max(0, 12 - aiScore.index) * 0.3 : 0;
+  return local + ai;
 }
 
-function addMatchReason(item: Title, preference: string): Title {
+function addMatchReason(item: Title, preference: string, aiReason = ""): Title {
   const terms = rankTerms(preference);
   const text = `${item.title} ${item.overview} ${item.genres.join(" ")}`.toLowerCase();
   const reasons: string[] = [];
+
+  if (aiReason) {
+    reasons.push(aiReason);
+  }
 
   if (terms.requiresTension) {
     if (/\b(psychological|paranoia|obsession|mind|conspiracy|cult)\b/.test(text)) {
@@ -305,7 +336,80 @@ function rankTerms(preference: string) {
     ["cult", "classic", "acclaimed"].forEach((term) => positive.add(term));
   }
 
+  if (/\bwestern|frontier|cowboy|outlaw|saloon|wild west\b/.test(lower)) {
+    ["western", "frontier", "cowboy", "outlaw", "saloon"].forEach((term) => positive.add(term));
+  }
+
   return { positive: [...positive], negative: [...negative], requiresTension };
+}
+
+async function getServiceCandidates(
+  service: (typeof services)[number],
+  showType: ShowType,
+  sort: SortKey,
+  genre: GenreKey,
+  keyword: string,
+  preference: string,
+  apiKey: string,
+) {
+  if (!preference) {
+    return getServiceWithFallback(service, showType, sort, genre, keyword, apiKey);
+  }
+
+  const pools = candidatePools(sort, genre, keyword);
+  const results = await Promise.allSettled(
+    pools.map((pool) => getCachedService(service, showType, pool.sort, pool.genre, pool.keyword, apiKey)),
+  );
+  const base = results.find(
+    (result): result is PromiseFulfilledResult<ServiceResult> =>
+      result.status === "fulfilled" && result.value.items.length > 0,
+  )?.value;
+
+  if (!base) {
+    return getServiceWithFallback(service, showType, sort, genre, keyword, apiKey);
+  }
+
+  const merged = new Map<string, Title>();
+
+  for (const result of results) {
+    if (result.status !== "fulfilled") {
+      continue;
+    }
+
+    for (const item of result.value.items) {
+      if (!merged.has(item.id)) {
+        merged.set(item.id, item);
+      }
+    }
+  }
+
+  return {
+    ...base,
+    items: [...merged.values()],
+  };
+}
+
+function candidatePools(sort: SortKey, genre: GenreKey, keyword: string) {
+  const pools: Array<{ sort: SortKey; genre: GenreKey; keyword: string }> = [
+    { sort, genre, keyword },
+    { sort: "rating", genre, keyword: "" },
+    { sort: "popularity_alltime", genre: genre === "all" ? "all" : genre, keyword: "" },
+  ];
+
+  return dedupePools(pools);
+}
+
+function dedupePools(pools: Array<{ sort: SortKey; genre: GenreKey; keyword: string }>) {
+  const seen = new Set<string>();
+
+  return pools.filter((pool) => {
+    const key = `${pool.sort}:${pool.genre}:${pool.keyword}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 function getDemoServicesWithFallback(
@@ -472,6 +576,14 @@ function normalizeKeyword(value: string | null) {
 
 function normalizePreference(value: string | null) {
   return (value ?? "").trim().slice(0, 160);
+}
+
+function clampScore(value: unknown) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return 50;
+  }
+
+  return Math.max(0, Math.min(100, value));
 }
 
 function slug(value: string) {
