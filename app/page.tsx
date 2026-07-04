@@ -1,9 +1,10 @@
 "use client";
 
 import { type CSSProperties, type FormEvent, useEffect, useMemo, useState } from "react";
-import type { DiscoverResponse, GenreKey, ShowType, SortKey } from "./types";
+import type { DiscoverResponse, GenreKey, SearchIntent, ShowType, SortKey } from "./types";
 
 const responseCache = new Map<string, DiscoverResponse>();
+const intentCache = new Map<string, SearchIntent>();
 const pageSize = 8;
 
 const sortOptions: Array<{ value: SortKey; label: string }> = [
@@ -40,7 +41,8 @@ export default function Home() {
   const [genre, setGenre] = useState<GenreKey>("all");
   const [keywordInput, setKeywordInput] = useState("");
   const [keyword, setKeyword] = useState("");
-  const [currentPage, setCurrentPage] = useState(0);
+  const [servicePages, setServicePages] = useState<Record<string, number>>({});
+  const [isInterpreting, setIsInterpreting] = useState(false);
   const [data, setData] = useState<DiscoverResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,17 +58,6 @@ export default function Home() {
 
     return params.toString();
   }, [genre, keyword, showType, sort]);
-
-  const maxPage = useMemo(() => {
-    if (!data) {
-      return 0;
-    }
-
-    return Math.max(
-      0,
-      ...data.services.map((service) => Math.ceil(service.items.length / pageSize) - 1),
-    );
-  }, [data]);
 
   useEffect(() => {
     let isMounted = true;
@@ -127,18 +118,72 @@ export default function Home() {
     });
   }
 
-  function submitSearch(event: FormEvent<HTMLFormElement>) {
+  async function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setCurrentPage(0);
-    setKeyword(keywordInput.trim());
+    const phrase = keywordInput.trim();
+
+    resetPages();
+
+    if (!phrase) {
+      setKeyword("");
+      setGenre("all");
+      return;
+    }
+
+    const cacheKey = phrase.toLowerCase();
+    const cachedIntent = intentCache.get(cacheKey);
+
+    if (cachedIntent) {
+      applyIntent(cachedIntent);
+      return;
+    }
+
+    setIsInterpreting(true);
+
+    try {
+      const response = await fetch("/api/intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: phrase }),
+      });
+      const intent = (await response.json()) as SearchIntent;
+
+      if (response.ok) {
+        intentCache.set(cacheKey, intent);
+        applyIntent(intent);
+      } else {
+        setKeyword(phrase);
+      }
+    } catch {
+      setKeyword(phrase);
+    } finally {
+      setIsInterpreting(false);
+    }
   }
 
-  const boundedPage = Math.min(currentPage, maxPage);
-  const pageStart = boundedPage * pageSize;
-  const pageEnd = pageStart + pageSize;
-  const largestResultCount = data
-    ? Math.max(0, ...data.services.map((service) => service.items.length))
-    : 0;
+  function applyIntent(intent: SearchIntent) {
+    resetPages();
+    if (intent.showType) {
+      setShowType(intent.showType);
+    }
+    if (intent.sort) {
+      setSort(intent.sort);
+    }
+    setGenre(intent.genre);
+    setKeyword(intent.keyword);
+  }
+
+  function resetPages() {
+    setServicePages({});
+  }
+
+  function setServicePage(serviceId: string, page: number) {
+    setServicePages((current) => ({
+      ...current,
+      [serviceId]: page,
+    }));
+  }
+
   const shouldShowStatus = Boolean(error || (data && data.source !== "live"));
 
   return (
@@ -164,7 +209,7 @@ export default function Home() {
           <button
             className={showType === "movie" ? "active" : ""}
             onClick={() => {
-              setCurrentPage(0);
+              resetPages();
               setShowType("movie");
             }}
             type="button"
@@ -174,7 +219,7 @@ export default function Home() {
           <button
             className={showType === "series" ? "active" : ""}
             onClick={() => {
-              setCurrentPage(0);
+              resetPages();
               setShowType("series");
             }}
             type="button"
@@ -189,7 +234,7 @@ export default function Home() {
             <select
               value={sort}
               onChange={(event) => {
-                setCurrentPage(0);
+                resetPages();
                 setSort(event.target.value as SortKey);
               }}
             >
@@ -206,7 +251,7 @@ export default function Home() {
             <select
               value={genre}
               onChange={(event) => {
-                setCurrentPage(0);
+                resetPages();
                 setGenre(event.target.value as GenreKey);
               }}
             >
@@ -224,42 +269,26 @@ export default function Home() {
           <input
             id="keyword"
             onChange={(event) => setKeywordInput(event.target.value)}
-            placeholder="Title or keyword"
+            placeholder="Describe what you want"
             type="search"
             value={keywordInput}
           />
-          <button type="submit">Go</button>
+          <button disabled={isInterpreting} type="submit">
+            {isInterpreting ? "..." : "Go"}
+          </button>
         </form>
       </section>
 
       {isLoading && !data ? <SkeletonGrid /> : null}
 
-      {data && largestResultCount > 0 ? (
-        <div className="page-controls" aria-label="Result pages">
-          <button
-            disabled={boundedPage === 0}
-            onClick={() => setCurrentPage((page) => Math.max(0, page - 1))}
-            type="button"
-          >
-            Previous 8
-          </button>
-          <span>
-            {pageStart + 1}-{Math.min(pageEnd, largestResultCount)}
-          </span>
-          <button
-            disabled={boundedPage >= maxPage}
-            onClick={() => setCurrentPage((page) => Math.min(maxPage, page + 1))}
-            type="button"
-          >
-            Next 8
-          </button>
-        </div>
-      ) : null}
-
       <section className="service-grid" aria-label="Streaming service results">
         {data?.services.map((service) => {
           const isCollapsed = collapsedServices.has(service.id);
           const panelId = `${service.id}-titles`;
+          const maxServicePage = Math.max(0, Math.ceil(service.items.length / pageSize) - 1);
+          const servicePage = Math.min(servicePages[service.id] ?? 0, maxServicePage);
+          const pageStart = servicePage * pageSize;
+          const pageEnd = pageStart + pageSize;
           const visibleItems = service.items.slice(pageStart, pageEnd);
 
           return (
@@ -324,6 +353,29 @@ export default function Home() {
                   </div>
                 </article>
               ))}
+              {service.items.length > pageSize ? (
+                <div className="page-controls" aria-label={`${service.name} result pages`}>
+                  <button
+                    disabled={servicePage === 0}
+                    onClick={() => setServicePage(service.id, Math.max(0, servicePage - 1))}
+                    type="button"
+                  >
+                    Previous 8
+                  </button>
+                  <span>
+                    {pageStart + 1}-{Math.min(pageEnd, service.items.length)}
+                  </span>
+                  <button
+                    disabled={servicePage >= maxServicePage}
+                    onClick={() =>
+                      setServicePage(service.id, Math.min(maxServicePage, servicePage + 1))
+                    }
+                    type="button"
+                  >
+                    Next 8
+                  </button>
+                </div>
+              ) : null}
             </div>
           </article>
           );

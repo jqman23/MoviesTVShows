@@ -25,6 +25,7 @@ Create `.env.local`:
 
 ```bash
 STREAMING_AVAILABILITY_API_KEY=your_api_key_here
+GROQ_API=your_groq_api_key_here
 ```
 
 Run the app:
@@ -35,15 +36,16 @@ npm run dev
 
 Open `http://localhost:3000`.
 
-The app still runs without an API key and will show demo data.
+The app still runs without keys. Without `STREAMING_AVAILABILITY_API_KEY`, it shows demo data. Without `GROQ_API`, natural-language search falls back to simple local parsing.
 
 ## Vercel Setup
 
 1. Import this repository into Vercel.
 2. Add an environment variable named `STREAMING_AVAILABILITY_API_KEY`.
-3. Set the value to your Streaming Availability API key.
-4. Confirm the framework preset is Next.js. This repo also includes `vercel.json` so Vercel uses `.next` instead of a static `public` output directory.
-5. Deploy.
+3. Add an optional environment variable named `GROQ_API` for natural-language search.
+4. Set the values to your API keys.
+5. Confirm the framework preset is Next.js. This repo also includes `vercel.json` so Vercel uses `.next` instead of a static `public` output directory.
+6. Deploy.
 
 The frontend calls `/api/discover`. That server route reads `process.env.STREAMING_AVAILABILITY_API_KEY` and sends the key only in the server-side request header to `https://api.movieofthenight.com/v4`.
 
@@ -56,6 +58,8 @@ country + service + type + sort window
 ```
 
 Responses are cached for six hours with Vercel/CDN `s-maxage` headers and server-side Next.js cache entries. The browser also reuses previously loaded filter combinations during the current session, so switching back to an already loaded view does not call the app API again.
+
+Natural-language search calls Groq only when the user submits the search form. The server caches each interpreted phrase for 24 hours, and the browser also reuses repeated phrases during the same session.
 
 ## Commands
 

@@ -44,3 +44,10 @@ export type DiscoverResponse = {
   message: string;
   services: ServiceResult[];
 };
+
+export type SearchIntent = {
+  showType: ShowType | null;
+  sort: SortKey | null;
+  genre: GenreKey;
+  keyword: string;
+};
