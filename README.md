@@ -1,37 +1,65 @@
-# StreamRank — Top Movies & TV by Service
+# MoviesTVShows
 
-A static streaming discovery app for comparing top movies and TV shows across Netflix, HBO/Max, Peacock, and Hulu in the United States.
+A Vercel-ready Next.js app for comparing top movies and TV shows across Netflix, HBO/Max, Peacock, and Hulu in the United States.
 
-## What it does
+## Features
 
-- Shows four service lanes: Netflix, HBO/Max, Peacock, and Hulu.
-- Switches between top movies and top TV shows.
-- Sorts by popularity window: past week, month, year, all time, or rating.
-- Uses the Streaming Availability API when an API key is provided.
-- Falls back to built-in demo data so the UI still works immediately.
+- Four service sections for Netflix, HBO/Max, Peacock, and Hulu.
+- Toggle between Movies and TV Shows.
+- Sort by past week, past month, past year, all-time popularity, or rating.
+- Uses US Streaming Availability API catalogs only.
+- Calls the Streaming Availability API from a server API route so the key is never exposed to browser code.
+- Caches live responses by country, service, content type, and sort window for six hours to protect low API quotas.
+- Shows polished demo data with a clear message when the API key is missing or a live request fails.
+- Includes loading and error states.
 
-## API setup
+## Local Setup
 
-The app uses the Streaming Availability API JavaScript client from Movie of the Night. Paste your API key into the app UI. It is stored in `localStorage` only and is not committed to the repo.
-
-For production, do not expose a private API key in browser code. Move API calls behind a serverless function or backend proxy before launching publicly.
-
-## Run locally
-
-Because this is a static app, you can open `index.html` directly or serve the folder locally:
+Install dependencies:
 
 ```bash
-python3 -m http.server 5173
+npm install
 ```
 
-Then open:
+Create `.env.local`:
+
+```bash
+STREAMING_AVAILABILITY_API_KEY=your_api_key_here
+```
+
+Run the app:
+
+```bash
+npm run dev
+```
+
+Open `http://localhost:3000`.
+
+The app still runs without an API key and will show demo data.
+
+## Vercel Setup
+
+1. Import this repository into Vercel.
+2. Add an environment variable named `STREAMING_AVAILABILITY_API_KEY`.
+3. Set the value to your Streaming Availability API key.
+4. Deploy.
+
+The frontend calls `/api/discover`. That server route reads `process.env.STREAMING_AVAILABILITY_API_KEY` and sends the key only in the server-side request header to `https://api.movieofthenight.com/v4`.
+
+## API Usage and Caching
+
+The API route fetches only the selected content type and caches each upstream request by:
 
 ```txt
-http://localhost:5173
+country + service + type + sort window
 ```
 
-## Files
+Responses are cached for six hours with Vercel/CDN `s-maxage` headers and server-side Next.js cache entries. The browser also reuses previously loaded filter combinations during the current session, so switching back to an already loaded view does not call the app API again.
 
-- `index.html` — app structure and CDN client script
-- `styles.css` — responsive dark streaming UI
-- `app.js` — Streaming Availability API integration, controls, rendering, and demo fallback
+## Commands
+
+```bash
+npm install
+npm run dev
+npm run build
+```
