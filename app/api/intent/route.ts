@@ -4,6 +4,7 @@ import type { GenreKey, SearchIntent, ShowType, SortKey } from "../../types";
 
 const GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions";
 const CACHE_SECONDS = 60 * 60 * 24;
+const INTENT_CACHE_VERSION = "intent-v2";
 
 const genres: GenreKey[] = [
   "all",
@@ -44,7 +45,7 @@ export async function POST(request: Request) {
 }
 
 function getCachedIntent(query: string) {
-  return unstable_cache(() => getIntent(query), ["search-intent", query.toLowerCase()], {
+  return unstable_cache(() => getIntent(query), [INTENT_CACHE_VERSION, query.toLowerCase()], {
     revalidate: CACHE_SECONDS,
     tags: [`search-intent-${slug(query)}`],
   })();

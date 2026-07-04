@@ -17,6 +17,8 @@ const COUNTRY = "us";
 const CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_MODEL = "llama-3.3-70b-versatile";
+const DISCOVER_CACHE_VERSION = "discover-v4";
+const RERANK_CACHE_VERSION = "rerank-v4";
 
 const services: Array<{ id: ServiceId; name: string; catalog: string; accent: string }> = [
   { id: "netflix", name: "Netflix", catalog: "netflix.subscription", accent: "#e50914" },
@@ -102,7 +104,7 @@ function rerankService(service: ServiceResult, preference: string) {
   return unstable_cache(
     () => rerankServiceUncached(service, preference),
     [
-      "rerank",
+      RERANK_CACHE_VERSION,
       service.id,
       slug(preference),
       service.items.map((item) => item.id).join("|").slice(0, 240),
@@ -138,7 +140,7 @@ async function rerankServiceUncached(service: ServiceResult, preference: string)
           {
             role: "system",
             content:
-              "You are a brutally accurate streaming recommendation ranker. Rank titles for the user's exact taste, not for generic popularity. Use semantic fit first, then audience/critic rating, then original streaming popularity. Strongly demote false positives. For psychological thrillers, prefer dread, paranoia, obsession, mind games, mystery, crime, horror, sci-fi unease, cults, conspiracies, investigations, dark tension, or unreliable reality. Comedy, sitcom, workplace comedy, reality, talk show, game show, light documentary, or general drama should rank low unless the title is clearly also a dark thriller. For Reddit/word-of-mouth requests, prefer cult/beloved/high-rating candidates but still require topic fit. Score each title 0-100. Return JSON only: {\"ranked\":[{\"id\":\"...\",\"score\":87,\"reason\":\"2-5 words\"}]}. Include every supplied id exactly once.",
+              "You are a brutally accurate streaming recommendation ranker. Rank titles for the user's exact taste, not for generic popularity. Use semantic fit first, then audience/critic rating, then original streaming popularity. Strongly demote false positives. For psychological thrillers, prefer dread, paranoia, obsession, mind games, mystery, crime, horror, sci-fi unease, cults, conspiracies, investigations, dark tension, or unreliable reality. Comedy, sitcom, workplace comedy, reality, talk show, game show, light documentary, or general drama should rank low unless the title is clearly also a dark thriller. For western/frontier/cowboy/outlaw requests, strongly prefer titles with western/frontier/cowboy/outlaw/saloon/ranch/frontier-town/old-west signals; generic acclaimed dramas or fantasy should rank low. For Reddit/word-of-mouth/cult/classic requests, prefer cult/beloved/high-rating candidates but still require topic fit. Score each title 0-100. Return JSON only: {\"ranked\":[{\"id\":\"...\",\"score\":87,\"reason\":\"2-5 words\"}]}. Include every supplied id exactly once.",
           },
           {
             role: "user",
@@ -305,6 +307,26 @@ function localScore(item: Title, terms: ReturnType<typeof rankTerms>, originalIn
     }
   }
 
+  if (terms.requiresWestern) {
+    const hasWesternSignal =
+      positiveMatches > 0 ||
+      /\b(western|frontier|cowboy|outlaw|saloon|ranch|gunslinger|old west|wild west|frontier town|lawman|sheriff)\b/.test(
+        text,
+      );
+    const hasMismatch =
+      /\b(fantasy|dragon|sitcom|workplace|office|modern family|talk show|reality|game show|superhero)\b/.test(
+        text,
+      );
+
+    if (!hasWesternSignal) {
+      score -= 24;
+    }
+
+    if (hasMismatch) {
+      score -= 12;
+    }
+  }
+
   return score;
 }
 
@@ -313,6 +335,7 @@ function rankTerms(preference: string) {
   const positive = new Set<string>();
   const negative = new Set<string>();
   let requiresTension = false;
+  let requiresWestern = false;
 
   if (/\bsci|sci-fi|science fiction|space|alien|future|cyberpunk\b/.test(lower)) {
     ["sci", "space", "alien", "future", "robot", "technology"].forEach((term) => positive.add(term));
@@ -337,10 +360,11 @@ function rankTerms(preference: string) {
   }
 
   if (/\bwestern|frontier|cowboy|outlaw|saloon|wild west\b/.test(lower)) {
+    requiresWestern = true;
     ["western", "frontier", "cowboy", "outlaw", "saloon"].forEach((term) => positive.add(term));
   }
 
-  return { positive: [...positive], negative: [...negative], requiresTension };
+  return { positive: [...positive], negative: [...negative], requiresTension, requiresWestern };
 }
 
 function preferenceKeywords(preference: string) {
@@ -509,7 +533,7 @@ function getCachedService(
 ) {
   return unstable_cache(
     () => fetchService(service, showType, sort, genre, keyword, apiKey),
-    [COUNTRY, service.id, showType, sort, genre, keyword || "any-keyword"],
+    [DISCOVER_CACHE_VERSION, COUNTRY, service.id, showType, sort, genre, keyword || "any-keyword"],
     {
       revalidate: CACHE_SECONDS,
       tags: [`discover-${COUNTRY}-${service.id}-${showType}-${sort}-${genre}-${keyword || "any"}`],
@@ -672,9 +696,23 @@ type GroqResponse = {
 };
 
 function cachedJson(payload: DiscoverResponse) {
-  return NextResponse.json(payload, {
+  return NextResponse.json(sanitizeDiscoverResponse(payload), {
     headers: {
       "Cache-Control": `public, s-maxage=${CACHE_SECONDS}, stale-while-revalidate=${CACHE_SECONDS * 2}`,
     },
   });
+}
+
+function sanitizeDiscoverResponse(payload: DiscoverResponse): DiscoverResponse {
+  return {
+    ...payload,
+    services: payload.services.map((service) => ({
+      ...service,
+      items: service.items.map((item) => ({
+        ...item,
+        genres: normalizeGenres(item.genres),
+        matchReason: typeof item.matchReason === "string" ? item.matchReason : "",
+      })),
+    })),
+  };
 }

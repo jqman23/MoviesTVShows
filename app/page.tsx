@@ -360,7 +360,7 @@ export default function Home() {
                     </div>
                     <p className="meta">
                       {item.year ?? "Year N/A"}
-                      {item.genres.length ? ` | ${item.genres.join(", ")}` : ""}
+                      {formatGenres(item.genres) ? ` | ${formatGenres(item.genres)}` : ""}
                     </p>
                     {item.matchReason ? <p className="match-reason">{item.matchReason}</p> : null}
                     <p className="overview">{item.overview}</p>
@@ -408,6 +408,26 @@ export default function Home() {
       ) : null}
     </main>
   );
+}
+
+function formatGenres(genres: unknown) {
+  if (!Array.isArray(genres)) {
+    return "";
+  }
+
+  return genres
+    .flatMap((genre) => {
+      if (typeof genre === "string") {
+        return [genre];
+      }
+
+      if (genre && typeof genre === "object" && "name" in genre && typeof genre.name === "string") {
+        return [genre.name];
+      }
+
+      return [];
+    })
+    .join(", ");
 }
 
 function SkeletonGrid() {
