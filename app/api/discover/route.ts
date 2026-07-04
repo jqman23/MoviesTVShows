@@ -12,8 +12,10 @@ import type {
 } from "../../types";
 
 const API_BASE = "https://api.movieofthenight.com/v4";
+const GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions";
 const COUNTRY = "us";
 const CACHE_SECONDS = 60 * 60 * 6;
+const RERANK_CACHE_SECONDS = 60 * 60 * 24;
 
 const services: Array<{ id: ServiceId; name: string; catalog: string; accent: string }> = [
   { id: "netflix", name: "Netflix", catalog: "netflix.subscription", accent: "#e50914" },
@@ -49,6 +51,7 @@ export async function GET(request: Request) {
   const sort = normalizeSort(searchParams.get("sort"));
   const genre = normalizeGenre(searchParams.get("genre"));
   const keyword = normalizeKeyword(searchParams.get("keyword"));
+  const preference = normalizePreference(searchParams.get("preference"));
   const apiKey = process.env.STREAMING_AVAILABILITY_API_KEY;
   const demoServices = getDemoServicesWithFallback(showType, sort, genre, keyword);
 
@@ -57,7 +60,7 @@ export async function GET(request: Request) {
       source: "demo",
       message:
         "Demo data is showing because STREAMING_AVAILABILITY_API_KEY is not set on the server.",
-      services: demoServices,
+      services: await rerankServices(demoServices, preference),
     });
   }
 
@@ -80,8 +83,162 @@ export async function GET(request: Request) {
     message: hadFailure
       ? "Some live catalog requests were unavailable, so demo titles fill the gaps."
       : "Live Streaming Availability API results for US catalogs.",
-    services: resolved,
+    services: await rerankServices(resolved, preference),
   });
+}
+
+async function rerankServices(serviceResults: ServiceResult[], preference: string) {
+  if (!preference) {
+    return serviceResults;
+  }
+
+  return Promise.all(serviceResults.map((service) => rerankService(service, preference)));
+}
+
+function rerankService(service: ServiceResult, preference: string) {
+  return unstable_cache(
+    () => rerankServiceUncached(service, preference),
+    [
+      "rerank",
+      service.id,
+      slug(preference),
+      service.items.map((item) => item.id).join("|").slice(0, 240),
+    ],
+    {
+      revalidate: RERANK_CACHE_SECONDS,
+      tags: [`rerank-${service.id}-${slug(preference)}`],
+    },
+  )();
+}
+
+async function rerankServiceUncached(service: ServiceResult, preference: string): Promise<ServiceResult> {
+  const locallyRanked = localRerank(service.items, preference);
+  const groqKey = process.env.GROQ_API;
+
+  if (!groqKey || locallyRanked.length < 2) {
+    return { ...service, items: locallyRanked };
+  }
+
+  try {
+    const response = await fetch(GROQ_BASE, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${groqKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "llama-3.1-8b-instant",
+        temperature: 0,
+        max_tokens: 420,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              "You rerank streaming titles for a user. Use semantic match first, then rating, then original popularity rank. Penalize titles whose genre/overview clearly conflicts with the request. For psychological thrillers, prefer suspense, mystery, crime, horror, sci-fi paranoia, mind-bending, dark, tense, or conspiracy themes. For Reddit/word-of-mouth requests, prefer cult/beloved/high-rating candidates but still require topic fit. Return JSON only: {\"ids\":[\"id1\",\"id2\"]}. Include every supplied id exactly once.",
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              request: preference,
+              service: service.name,
+              titles: locallyRanked.map((item, index) => ({
+                id: item.id,
+                title: item.title,
+                year: item.year,
+                rating: item.rating,
+                originalRank: index + 1,
+                genres: item.genres,
+                overview: item.overview,
+              })),
+            }),
+          },
+        ],
+      }),
+      next: {
+        revalidate: RERANK_CACHE_SECONDS,
+        tags: [`groq-rerank-${service.id}-${slug(preference)}`],
+      },
+    });
+
+    if (!response.ok) {
+      return { ...service, items: locallyRanked };
+    }
+
+    const payload = (await response.json()) as GroqResponse;
+    const content = payload.choices?.[0]?.message?.content ?? "";
+    const parsed = JSON.parse(content) as { ids?: string[] };
+    const orderedIds = Array.isArray(parsed.ids) ? parsed.ids : [];
+    const itemMap = new Map(locallyRanked.map((item) => [item.id, item]));
+    const ordered = orderedIds.flatMap((id) => {
+      const item = itemMap.get(id);
+      if (!item) {
+        return [];
+      }
+      itemMap.delete(id);
+      return [item];
+    });
+
+    return { ...service, items: [...ordered, ...itemMap.values()] };
+  } catch {
+    return { ...service, items: locallyRanked };
+  }
+}
+
+function localRerank(items: Title[], preference: string) {
+  const terms = rankTerms(preference);
+
+  return [...items].sort((a, b) => {
+    const scoreA = localScore(a, terms, items.indexOf(a));
+    const scoreB = localScore(b, terms, items.indexOf(b));
+    return scoreB - scoreA;
+  });
+}
+
+function localScore(item: Title, terms: ReturnType<typeof rankTerms>, originalIndex: number) {
+  const text = `${item.title} ${item.overview} ${item.genres.join(" ")}`.toLowerCase();
+  let score = (item.rating ?? 6) * 2 - originalIndex * 0.15;
+
+  for (const term of terms.positive) {
+    if (text.includes(term)) {
+      score += 4;
+    }
+  }
+
+  for (const term of terms.negative) {
+    if (text.includes(term)) {
+      score -= 5;
+    }
+  }
+
+  return score;
+}
+
+function rankTerms(preference: string) {
+  const lower = preference.toLowerCase();
+  const positive = new Set<string>();
+  const negative = new Set<string>();
+
+  if (/\bsci|sci-fi|science fiction|space|alien|future|cyberpunk\b/.test(lower)) {
+    ["sci", "space", "alien", "future", "robot", "technology"].forEach((term) => positive.add(term));
+  }
+
+  if (/\bpsych|thrill|throller|thriller|suspense|mind.?bend|paranoia|mystery\b/.test(lower)) {
+    ["thriller", "suspense", "mystery", "crime", "dark", "mind", "paranoia", "conspiracy"].forEach((term) =>
+      positive.add(term),
+    );
+    ["comedy", "sitcom", "stand-up", "talk show", "reality"].forEach((term) => negative.add(term));
+  }
+
+  if (/\bhorror|scary|spooky\b/.test(lower)) {
+    ["horror", "scary", "supernatural"].forEach((term) => positive.add(term));
+  }
+
+  if (/\breddit|cult|beloved|people like|recommend\b/.test(lower)) {
+    ["cult", "classic", "acclaimed"].forEach((term) => positive.add(term));
+  }
+
+  return { positive: [...positive], negative: [...negative] };
 }
 
 function getDemoServicesWithFallback(
@@ -246,6 +403,14 @@ function normalizeKeyword(value: string | null) {
   return (value ?? "").trim().slice(0, 80);
 }
 
+function normalizePreference(value: string | null) {
+  return (value ?? "").trim().slice(0, 160);
+}
+
+function slug(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 80);
+}
+
 type ApiShow = {
   id?: string;
   imdbId?: string;
@@ -272,6 +437,14 @@ type ApiShow = {
       };
     }>;
   };
+};
+
+type GroqResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
+  }>;
 };
 
 function cachedJson(payload: DiscoverResponse) {

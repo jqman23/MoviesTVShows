@@ -188,6 +188,18 @@ input {
   padding: 0 16px;
 }
 
+.search button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.loading-strip {
+  color: #8ed2ff;
+  font-size: 0.86rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .page-controls {
   display: flex;
   gap: 10px;
@@ -246,6 +258,10 @@ input {
   border-radius: 8px;
   background: rgba(25, 29, 36, 0.95);
   overflow: hidden;
+}
+
+.service.is-refreshing {
+  opacity: 0.72;
 }
 
 .service-header {
@@ -518,7 +534,7 @@ a:hover {
 
   .search {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
   }
 
@@ -534,6 +550,11 @@ a:hover {
   .page-controls {
     justify-content: space-between;
     margin: 8px 0;
+  }
+
+  .loading-strip {
+    text-align: center;
+    font-size: 0.78rem;
   }
 
   .service-grid {

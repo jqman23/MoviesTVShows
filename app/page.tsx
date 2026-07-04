@@ -41,6 +41,7 @@ export default function Home() {
   const [genre, setGenre] = useState<GenreKey>("all");
   const [keywordInput, setKeywordInput] = useState("");
   const [keyword, setKeyword] = useState("");
+  const [preference, setPreference] = useState("");
   const [servicePages, setServicePages] = useState<Record<string, number>>({});
   const [isInterpreting, setIsInterpreting] = useState(false);
   const [data, setData] = useState<DiscoverResponse | null>(null);
@@ -55,9 +56,12 @@ export default function Home() {
     if (keyword) {
       params.set("keyword", keyword);
     }
+    if (preference) {
+      params.set("preference", preference);
+    }
 
     return params.toString();
-  }, [genre, keyword, showType, sort]);
+  }, [genre, keyword, preference, showType, sort]);
 
   useEffect(() => {
     let isMounted = true;
@@ -126,6 +130,7 @@ export default function Home() {
 
     if (!phrase) {
       setKeyword("");
+      setPreference("");
       setGenre("all");
       return;
     }
@@ -134,7 +139,7 @@ export default function Home() {
     const cachedIntent = intentCache.get(cacheKey);
 
     if (cachedIntent) {
-      applyIntent(cachedIntent);
+      applyIntent(cachedIntent, phrase);
       return;
     }
 
@@ -150,18 +155,20 @@ export default function Home() {
 
       if (response.ok) {
         intentCache.set(cacheKey, intent);
-        applyIntent(intent);
+        applyIntent(intent, phrase);
       } else {
         setKeyword(phrase);
+        setPreference(phrase);
       }
     } catch {
       setKeyword(phrase);
+      setPreference(phrase);
     } finally {
       setIsInterpreting(false);
     }
   }
 
-  function applyIntent(intent: SearchIntent) {
+  function applyIntent(intent: SearchIntent, phrase: string) {
     resetPages();
     if (intent.showType) {
       setShowType(intent.showType);
@@ -171,6 +178,7 @@ export default function Home() {
     }
     setGenre(intent.genre);
     setKeyword(intent.keyword);
+    setPreference(phrase);
   }
 
   function resetPages() {
@@ -210,6 +218,7 @@ export default function Home() {
             className={showType === "movie" ? "active" : ""}
             onClick={() => {
               resetPages();
+              setPreference("");
               setShowType("movie");
             }}
             type="button"
@@ -220,6 +229,7 @@ export default function Home() {
             className={showType === "series" ? "active" : ""}
             onClick={() => {
               resetPages();
+              setPreference("");
               setShowType("series");
             }}
             type="button"
@@ -235,6 +245,7 @@ export default function Home() {
               value={sort}
               onChange={(event) => {
                 resetPages();
+                setPreference("");
                 setSort(event.target.value as SortKey);
               }}
             >
@@ -252,6 +263,7 @@ export default function Home() {
               value={genre}
               onChange={(event) => {
                 resetPages();
+                setPreference("");
                 setGenre(event.target.value as GenreKey);
               }}
             >
@@ -277,6 +289,12 @@ export default function Home() {
             {isInterpreting ? "..." : "Go"}
           </button>
         </form>
+
+        {(isLoading && data) || isInterpreting ? (
+          <div className="loading-strip" role="status">
+            Updating picks...
+          </div>
+        ) : null}
       </section>
 
       {isLoading && !data ? <SkeletonGrid /> : null}
@@ -293,7 +311,7 @@ export default function Home() {
 
           return (
             <article
-              className={`service ${isCollapsed ? "collapsed" : ""}`}
+              className={`service ${isCollapsed ? "collapsed" : ""} ${isLoading ? "is-refreshing" : ""}`}
               key={service.id}
               style={{ "--accent": service.accent } as CSSProperties}
             >
