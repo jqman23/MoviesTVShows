@@ -46,6 +46,7 @@ export default function Home() {
   const [data, setData] = useState<DiscoverResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
   const [collapsedServices, setCollapsedServices] = useState<Set<string>>(
     () => new Set(["netflix", "hbo", "peacock", "hulu"]),
   );
@@ -107,7 +108,21 @@ export default function Home() {
     };
   }, [query]);
 
+  useEffect(() => {
+    const queryList = window.matchMedia("(max-width: 760px)");
+    const syncViewport = () => setIsMobile(queryList.matches);
+
+    syncViewport();
+    queryList.addEventListener("change", syncViewport);
+
+    return () => queryList.removeEventListener("change", syncViewport);
+  }, []);
+
   function toggleService(serviceId: string) {
+    if (!isMobile) {
+      return;
+    }
+
     setCollapsedServices((current) => {
       const next = new Set(current);
 
@@ -300,12 +315,12 @@ export default function Home() {
 
       <section className="service-grid" aria-label="Streaming service results">
         {data?.services.map((service) => {
-          const isCollapsed = collapsedServices.has(service.id);
+          const isCollapsed = isMobile && collapsedServices.has(service.id);
           const panelId = `${service.id}-titles`;
           const maxServicePage = Math.max(0, Math.ceil(service.items.length / pageSize) - 1);
           const servicePage = Math.min(servicePages[service.id] ?? 0, maxServicePage);
-          const pageStart = servicePage * pageSize;
-          const pageEnd = pageStart + pageSize;
+          const pageStart = isMobile ? servicePage * pageSize : 0;
+          const pageEnd = isMobile ? pageStart + pageSize : service.items.length;
           const visibleItems = service.items.slice(pageStart, pageEnd);
 
           return (
@@ -316,7 +331,7 @@ export default function Home() {
             >
             <button
               aria-controls={panelId}
-              aria-expanded={!isCollapsed}
+              aria-expanded={isMobile ? !isCollapsed : true}
               className="service-header"
               onClick={() => toggleService(service.id)}
               type="button"
@@ -371,7 +386,7 @@ export default function Home() {
                   </div>
                 </article>
               ))}
-              {service.items.length > pageSize ? (
+              {isMobile && service.items.length > pageSize ? (
                 <div className="page-controls" aria-label={`${service.name} result pages`}>
                   <button
                     disabled={servicePage === 0}

@@ -201,7 +201,7 @@ input {
 }
 
 .page-controls {
-  display: flex;
+  display: none;
   gap: 10px;
   align-items: center;
   justify-content: center;
@@ -281,6 +281,7 @@ input {
 
 button.service-header {
   appearance: none;
+  pointer-events: none;
 }
 
 .service-header p {
@@ -555,6 +556,7 @@ a:hover {
   }
 
   .page-controls {
+    display: flex;
     justify-content: space-between;
     margin: 8px 0;
   }
@@ -584,6 +586,7 @@ a:hover {
 
   button.service-header {
     cursor: pointer;
+    pointer-events: auto;
   }
 
   .service-header .count {
