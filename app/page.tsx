@@ -1,7 +1,8 @@
 "use client";
 
 import { type CSSProperties, type FormEvent, useEffect, useMemo, useState } from "react";
-import type { DiscoverResponse, GenreKey, SearchIntent, ShowType, SortKey } from "./types";
+import { serviceIds } from "./types";
+import type { DiscoverResponse, GenreKey, SearchIntent, ServiceId, ShowType, SortKey } from "./types";
 
 const responseCache = new Map<string, DiscoverResponse>();
 const intentCache = new Map<string, SearchIntent>();
@@ -34,6 +35,13 @@ const rottenTomatoesLinks = {
   hulu: "https://www.rottentomatoes.com/browse/movies_at_home/affiliates:hulu~sort:popular",
 };
 
+const serviceLabels: Record<ServiceId, string> = {
+  netflix: "Netflix",
+  hbo: "HBO/Max",
+  peacock: "Peacock",
+  hulu: "Hulu",
+};
+
 export default function Home() {
   const [showType, setShowType] = useState<ShowType>("movie");
   const [sort, setSort] = useState<SortKey>("popularity_1week");
@@ -41,6 +49,7 @@ export default function Home() {
   const [keywordInput, setKeywordInput] = useState("");
   const [keyword, setKeyword] = useState("");
   const [preference, setPreference] = useState("");
+  const [selectedServices, setSelectedServices] = useState<Set<ServiceId>>(() => new Set(serviceIds));
   const [servicePages, setServicePages] = useState<Record<string, number>>({});
   const [isInterpreting, setIsInterpreting] = useState(false);
   const [data, setData] = useState<DiscoverResponse | null>(null);
@@ -53,6 +62,7 @@ export default function Home() {
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ type: showType, sort, genre });
+    params.set("services", [...selectedServices].join(","));
     if (keyword) {
       params.set("keyword", keyword);
     }
@@ -61,7 +71,7 @@ export default function Home() {
     }
 
     return params.toString();
-  }, [genre, keyword, preference, showType, sort]);
+  }, [genre, keyword, preference, selectedServices, showType, sort]);
 
   useEffect(() => {
     let isMounted = true;
@@ -206,6 +216,21 @@ export default function Home() {
     }));
   }
 
+  function toggleSelectedService(serviceId: ServiceId) {
+    resetPages();
+    setSelectedServices((current) => {
+      const next = new Set(current);
+
+      if (next.has(serviceId) && next.size > 1) {
+        next.delete(serviceId);
+      } else {
+        next.add(serviceId);
+      }
+
+      return next;
+    });
+  }
+
   const shouldShowStatus = Boolean(error || (data && data.source !== "live"));
 
   return (
@@ -303,6 +328,19 @@ export default function Home() {
             {isInterpreting ? "..." : "Go"}
           </button>
         </form>
+
+        <div className="platform-picker" aria-label="Streaming platforms">
+          {serviceIds.map((serviceId) => (
+            <label key={serviceId}>
+              <input
+                checked={selectedServices.has(serviceId)}
+                onChange={() => toggleSelectedService(serviceId)}
+                type="checkbox"
+              />
+              <span>{serviceLabels[serviceId]}</span>
+            </label>
+          ))}
+        </div>
 
         {(isLoading && data) || isInterpreting ? (
           <div className="loading-strip" role="status">

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { unstable_cache } from "next/cache";
 import { getDemoServices } from "../../data/demo";
+import { serviceIds } from "../../types";
 import type {
   DiscoverResponse,
   GenreKey,
@@ -18,9 +19,9 @@ const CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_CACHE_SECONDS = 60 * 60 * 24;
 const PROFILE_CACHE_SECONDS = 60 * 60 * 24 * 7;
 const SMART_MODEL = "openai/gpt-oss-120b";
-const DISCOVER_CACHE_VERSION = "discover-v11";
-const RERANK_CACHE_VERSION = "rerank-v13";
-const PROFILE_CACHE_VERSION = "profile-v1";
+const DISCOVER_CACHE_VERSION = "discover-v12";
+const RERANK_CACHE_VERSION = "rerank-v15";
+const PROFILE_CACHE_VERSION = "profile-v3";
 
 const services: Array<{ id: ServiceId; name: string; catalog: string; accent: string }> = [
   { id: "netflix", name: "Netflix", catalog: "netflix.subscription", accent: "#e50914" },
@@ -32,6 +33,7 @@ const services: Array<{ id: ServiceId; name: string; catalog: string; accent: st
 type TasteProfile = {
   summary: string;
   referenceTitles: string[];
+  targetTitles: string[];
   keywords: string[];
   mustHave: string[];
   niceToHave: string[];
@@ -66,9 +68,13 @@ export async function GET(request: Request) {
   const genre = normalizeGenre(searchParams.get("genre"));
   const keyword = normalizeKeyword(searchParams.get("keyword"));
   const preference = normalizePreference(searchParams.get("preference"));
+  const selectedServices = normalizeServices(searchParams.get("services"));
+  const activeServices = services.filter((service) => selectedServices.includes(service.id));
   const apiKey = process.env.STREAMING_AVAILABILITY_API_KEY;
-  const demoServices = getDemoServicesWithFallback(showType, sort, genre, keyword);
-  const profile = await getTasteProfile(preference);
+  const demoServices = getDemoServicesWithFallback(showType, sort, genre, keyword).filter((service) =>
+    selectedServices.includes(service.id),
+  );
+  const profile = await getTasteProfile(preference, activeServices);
 
   if (!apiKey) {
     return cachedJson({
@@ -80,7 +86,7 @@ export async function GET(request: Request) {
   }
 
   const liveResults = await Promise.allSettled(
-    services.map((service) =>
+    activeServices.map((service) =>
       getServiceCandidates(service, showType, sort, genre, keyword, preference, profile, apiKey),
     ),
   );
@@ -127,6 +133,7 @@ function rerankService(service: ServiceResult, preference: string, sort: SortKey
       sort,
       slug(profile.summary),
       profile.keywords.join("|"),
+      profile.targetTitles.join("|").slice(0, 240),
       service.items.map((item) => item.id).join("|").slice(0, 240),
     ],
     {
@@ -256,7 +263,11 @@ function guardedRerank(
       ? ranked.filter((item) => !isReferenceTitle(item.title, terms.referenceTitles))
       : ranked;
 
-  return withoutReferences.map((item) => addMatchReason(item, preference, profile, aiScores.get(item.id)?.reason));
+  const curated = withoutReferences.map((item) =>
+    addMatchReason(item, preference, profile, aiScores.get(item.id)?.reason),
+  );
+
+  return terms.discoveryMode ? curated.slice(0, 24) : curated;
 }
 
 function combinedScore(
@@ -336,6 +347,10 @@ function localScore(
 
   if (isReferenceTitle(item.title, terms.referenceTitles)) {
     score -= 55;
+  }
+
+  if (isReferenceTitle(item.title, terms.targetTitles)) {
+    score += 95;
   }
 
   for (const term of terms.positive) {
@@ -420,6 +435,14 @@ function localScore(
 
     if (hasGenericTasteMismatch(text, terms.preferenceText)) {
       score -= 34;
+    }
+
+    if (isLowSignalTrueCrimeDoc(item, text, terms.preferenceText)) {
+      score -= 28;
+    }
+
+    if (isProceduralMismatch(text, terms.preferenceText)) {
+      score -= 22;
     }
 
     if (terms.mustHave.length > 0 && !terms.mustHave.some((term) => text.includes(term))) {
@@ -522,27 +545,30 @@ function rankTerms(preference: string, profile = fallbackTasteProfile(preference
     requiresWestern,
     requiredSubjects,
     referenceTitles: references,
+    targetTitles: profile.targetTitles,
     discoveryMode,
     preferenceText: lower,
   };
 }
 
-function getTasteProfile(preference: string): Promise<TasteProfile> {
+function getTasteProfile(preference: string, activeServices = services): Promise<TasteProfile> {
   if (!preference) {
     return Promise.resolve(fallbackTasteProfile(""));
   }
 
+  const serviceKey = activeServices.map((service) => service.id).join(",");
+
   return unstable_cache(
-    () => getTasteProfileUncached(preference),
-    [PROFILE_CACHE_VERSION, slug(preference)],
+    () => getTasteProfileUncached(preference, activeServices),
+    [PROFILE_CACHE_VERSION, slug(preference), serviceKey],
     {
       revalidate: PROFILE_CACHE_SECONDS,
-      tags: [`profile-${slug(preference)}`],
+      tags: [`profile-${slug(preference)}-${serviceKey}`],
     },
   )();
 }
 
-async function getTasteProfileUncached(preference: string): Promise<TasteProfile> {
+async function getTasteProfileUncached(preference: string, activeServices = services): Promise<TasteProfile> {
   const groqKey = process.env.GROQ_API;
 
   if (!groqKey) {
@@ -565,11 +591,15 @@ async function getTasteProfileUncached(preference: string): Promise<TasteProfile
           {
             role: "system",
             content:
-              "Convert a natural language streaming request into a taste profile for a recommendation engine. Infer from reference titles using general cultural knowledge, but do not hardcode exact recommendations. Return JSON only: {\"summary\":\"...\",\"referenceTitles\":[...],\"keywords\":[...],\"mustHave\":[...],\"niceToHave\":[...],\"avoid\":[...],\"discoveryMode\":true}. keywords are short Streaming Availability search terms, max 8. mustHave/niceToHave/avoid are lowercase evidence terms likely to appear in title, genres, or overview. For 'like X' prompts, include inferred themes, tone, genre, subject matter, and adjacent discovery terms. Avoid generic words like good, best, popular, rating, show, series.",
+              "Convert a natural language streaming request into a taste profile for a streaming recommendation engine. Think like a high-intelligence film/TV recommender first: produce the same kind of answer you would give a person who asks for the best 20 on specific platforms, then produce signals the app can verify against streaming catalogs. Infer from reference titles using general cultural knowledge. Return JSON only: {\"summary\":\"...\",\"referenceTitles\":[...],\"targetTitles\":[...],\"keywords\":[...],\"mustHave\":[...],\"niceToHave\":[...],\"avoid\":[...],\"discoveryMode\":true}. targetTitles are the 15-24 best real titles for the request and selectedPlatforms, ordered best-first; avoid referenceTitles. Prefer titles likely available on selectedPlatforms in the United States when you know that. keywords are short Streaming Availability search terms, max 8. mustHave/niceToHave/avoid are lowercase evidence terms likely to appear in title, genres, or overview. For 'like X' prompts, include inferred themes, tone, genre, subject matter, and adjacent discovery terms. Avoid generic words like good, best, popular, rating, show, series. Avoid over-broad categories like only crime if the prompt implies psychology, cult dynamics, antiheroes, paranoia, tech unease, or prestige drama. Avoid flooding with generic true-crime documentaries unless the user explicitly asks for true crime.",
           },
           {
             role: "user",
-            content: preference,
+            content: JSON.stringify({
+              request: preference,
+              selectedPlatforms: activeServices.map((service) => service.name),
+              country: "United States",
+            }),
           },
         ],
       }),
@@ -597,6 +627,7 @@ function normalizeTasteProfile(profile: Partial<TasteProfile>, preference: strin
   return {
     summary: cleanListText(profile.summary).slice(0, 120) || fallback.summary,
     referenceTitles: cleanList(profile.referenceTitles, 5, 50, fallback.referenceTitles),
+    targetTitles: cleanList(profile.targetTitles, 20, 70, fallback.targetTitles),
     keywords: cleanList(profile.keywords, 8, 32, fallback.keywords),
     mustHave: cleanList(profile.mustHave, 10, 32, fallback.mustHave),
     niceToHave: cleanList(profile.niceToHave, 12, 32, fallback.niceToHave),
@@ -635,6 +666,7 @@ function fallbackTasteProfile(preference: string): TasteProfile {
   return {
     summary: references.length > 0 ? `Similar to ${references.join(", ")}` : preference.slice(0, 120),
     referenceTitles: references,
+    targetTitles: [],
     keywords: [...keywords].slice(0, 8),
     mustHave: [...mustHave].slice(0, 10),
     niceToHave: [...niceToHave].slice(0, 12),
@@ -692,6 +724,30 @@ function hasGenericTasteMismatch(text: string, lowerPreference: string) {
 
 function hasTasteSignal(text: string) {
   return /\b(crime|criminal|thriller|mystery|murder|killer|detective|investigation|conspiracy|cult|dark|drug|cartel|mob|gang|psychological|paranoia|horror|science fiction|sci-fi|sci fi|ai|robot|android|dystopian|serial killer|antihero|anti-hero|unsettling|mind game|obsession|surveillance|commune|sect)\b/.test(
+    text,
+  );
+}
+
+function isLowSignalTrueCrimeDoc(item: Title, text: string, lowerPreference: string) {
+  const explicitlyWantsDoc = /\b(documentary|docuseries|true crime|real case|real story)\b/.test(lowerPreference);
+  const isDoc = /\b(documentary|docuseries|true-crime|true crime|interviews|testimony|investigates)\b/.test(text);
+  const isGenericCase = /\b(murder case|missing person|serial killer|homicide|detectives revisit|crime documentary|docuseries)\b/.test(
+    text,
+  );
+
+  return isDoc && isGenericCase && !explicitlyWantsDoc && (item.rating ?? 0) < 7.4;
+}
+
+function isProceduralMismatch(text: string, lowerPreference: string) {
+  const explicitlyWantsProcedural = /\b(procedural|case of the week|police show|law and order|detective show)\b/.test(
+    lowerPreference,
+  );
+
+  if (explicitlyWantsProcedural) {
+    return false;
+  }
+
+  return /\b(law & order|law and order|chicago p\.?d|chicago med|chicago fire|ncis|csi|special victims unit|team of detectives|case of the week)\b/.test(
     text,
   );
 }
@@ -909,14 +965,18 @@ function candidatePools(
 
   const candidateKeywords = [...profile.keywords, ...preferenceKeywords(preference)];
 
-  for (const candidateKeyword of [...new Set(candidateKeywords)].slice(0, 6)) {
+  for (const targetTitle of profile.targetTitles.slice(0, 16)) {
+    pools.push({ sort: "popularity_alltime", genre: "all", keyword: targetTitle });
+  }
+
+  for (const candidateKeyword of [...new Set(candidateKeywords)].slice(0, 4)) {
     pools.push({ sort, genre: "all", keyword: candidateKeyword });
     if (references.length > 0 || profile.discoveryMode) {
       pools.push({ sort: "popularity_alltime", genre: "all", keyword: candidateKeyword });
     }
   }
 
-  return dedupePools(pools).slice(0, 9);
+  return dedupePools(pools).slice(0, 18);
 }
 
 function windowRankWeight(sort: SortKey, terms: ReturnType<typeof rankTerms>) {
@@ -1122,6 +1182,14 @@ function normalizeShowType(value: string | null): ShowType {
 
 function normalizeSort(value: string | null): SortKey {
   return sortKeys.includes(value as SortKey) ? (value as SortKey) : "popularity_1week";
+}
+
+function normalizeServices(value: string | null): ServiceId[] {
+  const selected = (value ?? "")
+    .split(",")
+    .filter((service): service is ServiceId => serviceIds.includes(service as ServiceId));
+
+  return selected.length > 0 ? selected : [...serviceIds];
 }
 
 function normalizeGenre(value: string | null): GenreKey {

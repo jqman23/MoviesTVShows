@@ -51,3 +51,5 @@ export type SearchIntent = {
   genre: GenreKey;
   keyword: string;
 };
+
+export const serviceIds = ["netflix", "hbo", "peacock", "hulu"] as const satisfies ServiceId[];
