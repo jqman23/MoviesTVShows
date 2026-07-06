@@ -17,8 +17,8 @@ const COUNTRY = "us";
 const CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_MODEL = "llama-3.3-70b-versatile";
-const DISCOVER_CACHE_VERSION = "discover-v9";
-const RERANK_CACHE_VERSION = "rerank-v11";
+const DISCOVER_CACHE_VERSION = "discover-v10";
+const RERANK_CACHE_VERSION = "rerank-v12";
 
 const services: Array<{ id: ServiceId; name: string; catalog: string; accent: string }> = [
   { id: "netflix", name: "Netflix", catalog: "netflix.subscription", accent: "#e50914" },
@@ -146,7 +146,7 @@ async function rerankServiceUncached(
           {
             role: "system",
             content:
-              "You are a brutally accurate streaming recommendation ranker. Rank titles for the user's exact taste, not for generic popularity. Use semantic fit first, then audience/critic rating, then original streaming popularity. Strongly demote false positives. If referenceTitles are supplied, treat them as taste anchors and infer shared themes, tone, structure, pacing, and audience appeal; do not require literal title-word matches, and score the reference titles themselves very low because the user wants recommendations. If discoveryMode is true, prefer less obvious high-fit titles over the most mainstream default when quality and fit are competitive. If the user asks about a subject such as dogs, chefs, lawyers, vampires, football, cowboys, etc., titles must actually be about or prominently include that subject; generic high-rated shows should rank low. For psychological thrillers, prefer dread, paranoia, obsession, mind games, mystery, crime, horror, sci-fi unease, cults, conspiracies, investigations, dark tension, or unreliable reality. Comedy, sitcom, workplace comedy, reality, talk show, game show, light documentary, or general drama should rank low unless the title is clearly also a dark thriller. For western/frontier/cowboy/outlaw requests, strongly prefer titles with western/frontier/cowboy/outlaw/saloon/ranch/frontier-town/old-west signals; generic acclaimed dramas or fantasy should rank low. For Reddit/word-of-mouth/cult/classic requests, prefer cult/beloved/high-rating candidates but still require topic fit. Score each title 0-100. Return JSON only: {\"ranked\":[{\"id\":\"...\",\"score\":87,\"reason\":\"2-4 specific words\"}]}. Include every supplied id exactly once. Reasons must be short positive evidence like 'criminal antihero', 'cult paranoia', or 'dark investigation'. Never write reasons like 'no dogs', 'less relevant', 'does not match', or 'no match'.",
+              "You are a brutally accurate streaming recommendation ranker. Rank titles for the user's exact taste, not for generic popularity. Use semantic fit first, then audience/critic rating, then original streaming popularity. Strongly demote false positives. If referenceTitles are supplied, treat them as taste anchors and infer shared themes, tone, structure, pacing, and audience appeal; do not require literal title-word matches, and score the reference titles themselves very low because the user wants recommendations. If discoveryMode is true, prefer less obvious high-fit titles over the most mainstream default when quality and fit are competitive. If the user asks about a subject such as dogs, chefs, lawyers, vampires, football, cowboys, etc., titles must actually be about or prominently include that subject; generic high-rated shows should rank low. For psychological thrillers, prefer dread, paranoia, obsession, mind games, mystery, crime, horror, sci-fi unease, cults, conspiracies, investigations, dark tension, or unreliable reality. Comedy, sitcom, workplace comedy, reality, talk show, game show, light documentary, or general drama should rank low unless the title is clearly also a dark thriller. For western/frontier/cowboy/outlaw requests, strongly prefer titles with western/frontier/cowboy/outlaw/saloon/ranch/frontier-town/old-west signals; generic acclaimed dramas or fantasy should rank low. For Reddit/word-of-mouth/cult/classic requests, prefer cult/beloved/high-rating candidates but still require topic fit. Score each title 0-100. Return JSON only: {\"ranked\":[{\"id\":\"...\",\"score\":87,\"reason\":\"2-4 specific words\"}]}. Include every supplied id exactly once. Reasons must be short positive evidence like 'criminal antihero', 'cult paranoia', or 'dark investigation'. Never write failure labels such as 'reference title', 'already ranked', 'no crime', 'no thriller', 'some elements', 'dominant', 'less relevant', 'does not match', or 'no match'.",
           },
           {
             role: "user",
@@ -155,7 +155,7 @@ async function rerankServiceUncached(
               referenceTitles: references,
               discoveryMode,
               service: service.name,
-              titles: locallyRanked.map((item, index) => ({
+              titles: locallyRanked.slice(0, 60).map((item, index) => ({
                 id: item.id,
                 title: item.title,
                 year: item.year,
@@ -245,7 +245,7 @@ function combinedScore(
 ) {
   const local = localScore(item, terms, originalIndex, sort);
   const aiWeight = terms.referenceTitles.length > 0 || terms.discoveryMode ? 0.56 : 0.38;
-  const aiPenalty = aiScore?.reason && isNegativeReason(aiScore.reason) ? 18 : 0;
+  const aiPenalty = aiScore?.reason && isNegativeReason(aiScore.reason) ? 34 : 0;
   const ai = aiScore ? aiScore.score * aiWeight + Math.max(0, 12 - aiScore.index) * 0.35 - aiPenalty : 0;
   return local + ai;
 }
@@ -281,11 +281,11 @@ function addMatchReason(item: Title, preference: string, aiReason = ""): Title {
     reasons.push(genreMatch);
   }
 
-  if ((item.rating ?? 0) >= 7.5 && reasons.length < 2) {
+  if ((item.rating ?? 0) >= 7.5 && reasons.length < 2 && (!terms.discoveryMode || hasTasteSignal(text))) {
     reasons.push("strong rating");
   }
 
-  if (reasons.length === 0 && item.genres.length > 0) {
+  if (reasons.length === 0 && item.genres.length > 0 && !terms.discoveryMode) {
     reasons.push(item.genres[0]);
   }
 
@@ -376,7 +376,7 @@ function localScore(
     }
 
     if (hasGenericTasteMismatch(text, terms.preferenceText)) {
-      score -= 18;
+      score -= 34;
     }
 
     if (originalIndex < 4 && (item.rating ?? 0) < 8) {
@@ -397,7 +397,7 @@ function cleanAiReason(reason: string) {
 }
 
 function isNegativeReason(reason: string) {
-  return /\b(no match|no dogs?|not about|none|less relevant|lower relevance|doesn'?t match|do not match|don't match|but less|while highly rated)\b/i.test(
+  return /\b(no match|no dogs?|not about|none|less relevant|lower relevance|doesn'?t match|do not match|don't match|but less|while highly rated|reference title|already ranked|no [a-z]+ element|no [a-z]+ elements|some [a-z]+ element|some [a-z]+ elements|[a-z]+ dominant)\b/i.test(
     reason,
   );
 }
@@ -476,10 +476,7 @@ function rankTerms(preference: string) {
 }
 
 function hasGenericTasteMismatch(text: string, lowerPreference: string) {
-  const hasDarkSignal =
-    /\b(crime|criminal|thriller|mystery|murder|killer|detective|investigation|conspiracy|cult|dark|drug|cartel|mob|gang|psychological|paranoia|horror|science fiction|sci-fi|sci fi|ai|robot|android)\b/.test(
-      text,
-    );
+  const hasDarkSignal = hasTasteSignal(text);
 
   if (hasDarkSignal) {
     return false;
@@ -495,6 +492,12 @@ function hasGenericTasteMismatch(text: string, lowerPreference: string) {
   }
 
   return /\b(comedy|sitcom|romance|romantic|medical|hospital|doctor|fantasy|dragon|period drama|family drama|workplace|adventure|historical adventure)\b/.test(
+    text,
+  );
+}
+
+function hasTasteSignal(text: string) {
+  return /\b(crime|criminal|thriller|mystery|murder|killer|detective|investigation|conspiracy|cult|dark|drug|cartel|mob|gang|psychological|paranoia|horror|science fiction|sci-fi|sci fi|ai|robot|android|dystopian|serial killer|antihero|anti-hero|unsettling|mind game|obsession|surveillance|commune|sect)\b/.test(
     text,
   );
 }
@@ -864,7 +867,7 @@ async function fetchService(
     id: service.id,
     name: service.name,
     accent: service.accent,
-    items: (payload.shows ?? []).slice(0, 20).map((show) => normalizeTitle(show, service.id)),
+    items: (payload.shows ?? []).slice(0, 40).map((show) => normalizeTitle(show, service.id)),
   };
 }
 
