@@ -6,7 +6,7 @@ A Vercel-ready Next.js app for comparing top movies and TV shows across Netflix,
 
 - Four service sections for Netflix, HBO/Max, Peacock, and Hulu.
 - Toggle between Movies and TV Shows.
-- Sort by past week, past month, past year, all-time popularity, or rating.
+- Choose the discovery time window: past week, past month, past year, or all-time.
 - Uses US Streaming Availability API catalogs only.
 - Calls the Streaming Availability API from a server API route so the key is never exposed to browser code.
 - Caches live responses by country, service, content type, and sort window for six hours to protect low API quotas.
@@ -59,7 +59,7 @@ country + service + type + sort window
 
 Responses are cached for six hours with Vercel/CDN `s-maxage` headers and server-side Next.js cache entries. The browser also reuses previously loaded filter combinations during the current session, so switching back to an already loaded view does not call the app API again.
 
-Natural-language search calls Groq only when the user submits the search form. The server caches each interpreted phrase for 24 hours, and the browser also reuses repeated phrases during the same session. The original phrase is also used to build a bounded broader candidate pool per service, then rerank those titles by semantic fit, rating, original popularity rank, and model score. If Groq is unavailable, a local scorer still reranks broad candidates so the app keeps showing results.
+Natural-language search calls Groq only when the user submits the search form. The server caches each interpreted phrase for 24 hours, and the browser also reuses repeated phrases during the same session. The selected time window controls the candidate pool, while rating/quality is always part of the final ranking. The original phrase is also used to build a bounded broader candidate pool per service, then rerank those titles by semantic fit, rating, original time-window rank, and model score. If Groq is unavailable, a local scorer still reranks broad candidates so the app keeps showing results.
 
 ## Commands
 

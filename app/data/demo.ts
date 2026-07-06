@@ -113,11 +113,9 @@ export function getDemoServices(
           item.overview.toLowerCase().includes(normalizedKeyword),
       )
       .sort((a, b) => {
-        if (sort === "rating") {
-          return (b.rating ?? 0) - (a.rating ?? 0);
-        }
-
-        return a.id.localeCompare(b.id);
+        return sort === "popularity_alltime"
+          ? (b.rating ?? 0) - (a.rating ?? 0)
+          : a.id.localeCompare(b.id);
       }),
   }));
 }

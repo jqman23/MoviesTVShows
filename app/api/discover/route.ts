@@ -18,7 +18,7 @@ const CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_MODEL = "llama-3.3-70b-versatile";
 const DISCOVER_CACHE_VERSION = "discover-v6";
-const RERANK_CACHE_VERSION = "rerank-v6";
+const RERANK_CACHE_VERSION = "rerank-v8";
 
 const services: Array<{ id: ServiceId; name: string; catalog: string; accent: string }> = [
   { id: "netflix", name: "Netflix", catalog: "netflix.subscription", accent: "#e50914" },
@@ -32,7 +32,6 @@ const sortKeys: SortKey[] = [
   "popularity_1month",
   "popularity_1year",
   "popularity_alltime",
-  "rating",
 ];
 
 const genreKeys: GenreKey[] = [
@@ -63,7 +62,7 @@ export async function GET(request: Request) {
       source: "demo",
       message:
         "Demo data is showing because STREAMING_AVAILABILITY_API_KEY is not set on the server.",
-      services: await rerankServices(demoServices, preference),
+      services: await rerankServices(demoServices, preference, sort),
     });
   }
 
@@ -88,25 +87,26 @@ export async function GET(request: Request) {
     message: hadFailure
       ? "Some live catalog requests were unavailable, so demo titles fill the gaps."
       : "Live Streaming Availability API results for US catalogs.",
-    services: await rerankServices(resolved, preference),
+    services: await rerankServices(resolved, preference, sort),
   });
 }
 
-async function rerankServices(serviceResults: ServiceResult[], preference: string) {
+async function rerankServices(serviceResults: ServiceResult[], preference: string, sort: SortKey) {
   if (!preference) {
     return serviceResults;
   }
 
-  return Promise.all(serviceResults.map((service) => rerankService(service, preference)));
+  return Promise.all(serviceResults.map((service) => rerankService(service, preference, sort)));
 }
 
-function rerankService(service: ServiceResult, preference: string) {
+function rerankService(service: ServiceResult, preference: string, sort: SortKey) {
   return unstable_cache(
-    () => rerankServiceUncached(service, preference),
+    () => rerankServiceUncached(service, preference, sort),
     [
       RERANK_CACHE_VERSION,
       service.id,
       slug(preference),
+      sort,
       service.items.map((item) => item.id).join("|").slice(0, 240),
     ],
     {
@@ -116,8 +116,12 @@ function rerankService(service: ServiceResult, preference: string) {
   )();
 }
 
-async function rerankServiceUncached(service: ServiceResult, preference: string): Promise<ServiceResult> {
-  const locallyRanked = localRerank(service.items, preference);
+async function rerankServiceUncached(
+  service: ServiceResult,
+  preference: string,
+  sort: SortKey,
+): Promise<ServiceResult> {
+  const locallyRanked = localRerank(service.items, preference, sort);
   const groqKey = process.env.GROQ_API;
 
   if (!groqKey || locallyRanked.length < 2) {
@@ -197,26 +201,27 @@ async function rerankServiceUncached(service: ServiceResult, preference: string)
       return [item];
     });
 
-    return { ...service, items: guardedRerank([...ordered, ...itemMap.values()], preference, aiScores) };
+    return { ...service, items: guardedRerank([...ordered, ...itemMap.values()], preference, sort, aiScores) };
   } catch {
     return { ...service, items: locallyRanked };
   }
 }
 
-function localRerank(items: Title[], preference: string) {
-  return guardedRerank(items, preference);
+function localRerank(items: Title[], preference: string, sort: SortKey) {
+  return guardedRerank(items, preference, sort);
 }
 
 function guardedRerank(
   items: Title[],
   preference: string,
+  sort: SortKey,
   aiScores = new Map<string, { score: number; reason: string; index: number }>(),
 ) {
   const terms = rankTerms(preference);
 
   return [...items].sort((a, b) => {
-    const scoreA = combinedScore(a, terms, items.indexOf(a), aiScores.get(a.id));
-    const scoreB = combinedScore(b, terms, items.indexOf(b), aiScores.get(b.id));
+    const scoreA = combinedScore(a, terms, items.indexOf(a), sort, aiScores.get(a.id));
+    const scoreB = combinedScore(b, terms, items.indexOf(b), sort, aiScores.get(b.id));
     return scoreB - scoreA;
   }).map((item) => addMatchReason(item, preference, aiScores.get(item.id)?.reason));
 }
@@ -225,10 +230,11 @@ function combinedScore(
   item: Title,
   terms: ReturnType<typeof rankTerms>,
   originalIndex: number,
+  sort: SortKey,
   aiScore?: { score: number; index: number },
 ) {
-  const local = localScore(item, terms, originalIndex);
-  const ai = aiScore ? aiScore.score * 0.42 + Math.max(0, 12 - aiScore.index) * 0.3 : 0;
+  const local = localScore(item, terms, originalIndex, sort);
+  const ai = aiScore ? aiScore.score * 0.3 + Math.max(0, 12 - aiScore.index) * 0.2 : 0;
   return local + ai;
 }
 
@@ -277,9 +283,14 @@ function addMatchReason(item: Title, preference: string, aiReason = ""): Title {
   };
 }
 
-function localScore(item: Title, terms: ReturnType<typeof rankTerms>, originalIndex: number) {
+function localScore(
+  item: Title,
+  terms: ReturnType<typeof rankTerms>,
+  originalIndex: number,
+  sort: SortKey,
+) {
   const text = `${item.title} ${item.overview} ${item.genres.join(" ")}`.toLowerCase();
-  let score = (item.rating ?? 6) * 2 - originalIndex * 0.15;
+  let score = (item.rating ?? 6) * 5 - originalIndex * windowRankWeight(sort);
   let positiveMatches = 0;
 
   for (const term of terms.positive) {
@@ -537,16 +548,30 @@ async function getServiceCandidates(
 function candidatePools(sort: SortKey, genre: GenreKey, keyword: string, preference: string) {
   const pools: Array<{ sort: SortKey; genre: GenreKey; keyword: string }> = [
     { sort, genre, keyword },
-    { sort: "rating", genre, keyword: "" },
-    { sort: "popularity_alltime", genre: genre === "all" ? "all" : genre, keyword: "" },
+    { sort, genre, keyword: "" },
   ];
 
   for (const candidateKeyword of preferenceKeywords(preference)) {
-    pools.push({ sort: "popularity_alltime", genre: "all", keyword: candidateKeyword });
-    pools.push({ sort: "rating", genre: "all", keyword: candidateKeyword });
+    pools.push({ sort, genre: "all", keyword: candidateKeyword });
   }
 
   return dedupePools(pools);
+}
+
+function windowRankWeight(sort: SortKey) {
+  if (sort === "popularity_1week") {
+    return 3.4;
+  }
+
+  if (sort === "popularity_1month") {
+    return 2.8;
+  }
+
+  if (sort === "popularity_1year") {
+    return 2.2;
+  }
+
+  return 1.6;
 }
 
 function dedupePools(pools: Array<{ sort: SortKey; genre: GenreKey; keyword: string }>) {

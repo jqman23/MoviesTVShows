@@ -4,8 +4,7 @@ export type SortKey =
   | "popularity_1week"
   | "popularity_1month"
   | "popularity_1year"
-  | "popularity_alltime"
-  | "rating";
+  | "popularity_alltime";
 
 export type GenreKey =
   | "all"

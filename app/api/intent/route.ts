@@ -4,7 +4,7 @@ import type { GenreKey, SearchIntent, ShowType, SortKey } from "../../types";
 
 const GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions";
 const CACHE_SECONDS = 60 * 60 * 24;
-const INTENT_CACHE_VERSION = "intent-v2";
+const INTENT_CACHE_VERSION = "intent-v3";
 
 const genres: GenreKey[] = [
   "all",
@@ -24,7 +24,6 @@ const sorts: SortKey[] = [
   "popularity_1month",
   "popularity_1year",
   "popularity_alltime",
-  "rating",
 ];
 
 export async function POST(request: Request) {
@@ -74,7 +73,7 @@ async function getIntent(query: string): Promise<SearchIntent> {
           {
             role: "system",
             content:
-              "Map a streaming search request to JSON only. Allowed showType: movie, series, null. Allowed genre: all, action, animation, comedy, documentary, drama, horror, romance, scifi, thriller. Allowed sort: popularity_1week, popularity_1month, popularity_1year, popularity_alltime, rating, null. Prefer broad filters so the app always shows results. Use rating for best/highly rated/critically acclaimed/people recommend it. Use popularity_alltime for cult favorite, Reddit favorite, people online like it, beloved, classic, or word-of-mouth requests. Use popularity_1week for trending/new/popular right now. If multiple genres are requested, choose the strongest concrete genre; for sci-fi plus psychological thriller, choose scifi unless thriller is clearly primary. Leave keyword empty unless the user is directly asking for a specific title/person/franchise. If the phrase says 'like X' or 'similar to X', treat X as a reference for taste, not a keyword filter. Do not put Reddit, generic moods, plot vibes, adjectives, runtimes, references, or broad requests in keyword.",
+              "Map a streaming search request to JSON only. Allowed showType: movie, series, null. Allowed genre: all, action, animation, comedy, documentary, drama, horror, romance, scifi, thriller. Allowed sort: popularity_1week, popularity_1month, popularity_1year, popularity_alltime, null. The app always considers rating/quality separately, so never return rating as sort. Prefer broad filters so the app always shows results. Use popularity_alltime for best, highly rated, critically acclaimed, cult favorite, Reddit favorite, people online like it, beloved, classic, or word-of-mouth requests. Use popularity_1week for trending/new/popular right now. If multiple genres are requested, choose the strongest concrete genre; for sci-fi plus psychological thriller, choose scifi unless thriller is clearly primary. Leave keyword empty unless the user is directly asking for a specific title/person/franchise. If the phrase says 'like X' or 'similar to X', treat X as a reference for taste, not a keyword filter. Do not put Reddit, generic moods, plot vibes, adjectives, runtimes, references, or broad requests in keyword.",
           },
           {
             role: "user",
@@ -114,12 +113,10 @@ function fallbackIntent(query: string): SearchIntent {
     (/\blove|date night\b/.test(lower) ? "romance" : null) ??
     "all";
 
-  const sort: SortKey | null = /\breddit|word of mouth|word-of-mouth|cult|beloved|people like|people recommend|online like\b/.test(
+  const sort: SortKey | null = /\breddit|word of mouth|word-of-mouth|cult|beloved|people like|people recommend|online like|best|highest|rated|critically|score|recommend|recommended\b/.test(
     lower,
   )
     ? "popularity_alltime"
-    : /\bbest|highest|rated|critically|score|recommend|recommended\b/.test(lower)
-    ? "rating"
     : /\bclassic|all time|all-time\b/.test(lower)
       ? "popularity_alltime"
       : /\bnew|trending|popular|tonight|right now\b/.test(lower)

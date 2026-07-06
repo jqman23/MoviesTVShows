@@ -12,7 +12,6 @@ const sortOptions: Array<{ value: SortKey; label: string }> = [
   { value: "popularity_1month", label: "Past month" },
   { value: "popularity_1year", label: "Past year" },
   { value: "popularity_alltime", label: "All time" },
-  { value: "rating", label: "Rating" },
 ];
 
 const genreOptions: Array<{ value: GenreKey; label: string }> = [
@@ -201,7 +200,7 @@ export default function Home() {
           <p className="eyebrow">MoviesTVShows</p>
           <h1 id="page-title">Find what to watch</h1>
           <p className="lede">
-            Browse top US movies and TV shows by service, genre, rating, and popularity.
+            Browse top US movies and TV shows by service, genre, quality, and time window.
           </p>
         </div>
 
@@ -240,7 +239,7 @@ export default function Home() {
 
         <div className="filters">
           <label className="select-label">
-            Sort
+            Time range
             <select
               value={sort}
               onChange={(event) => {
