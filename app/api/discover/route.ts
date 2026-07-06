@@ -17,8 +17,8 @@ const COUNTRY = "us";
 const CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_MODEL = "llama-3.3-70b-versatile";
-const DISCOVER_CACHE_VERSION = "discover-v6";
-const RERANK_CACHE_VERSION = "rerank-v8";
+const DISCOVER_CACHE_VERSION = "discover-v7";
+const RERANK_CACHE_VERSION = "rerank-v9";
 
 const services: Array<{ id: ServiceId; name: string; catalog: string; accent: string }> = [
   { id: "netflix", name: "Netflix", catalog: "netflix.subscription", accent: "#e50914" },
@@ -123,6 +123,8 @@ async function rerankServiceUncached(
 ): Promise<ServiceResult> {
   const locallyRanked = localRerank(service.items, preference, sort);
   const groqKey = process.env.GROQ_API;
+  const references = referenceTitles(preference);
+  const discoveryMode = wantsDiscovery(preference);
 
   if (!groqKey || locallyRanked.length < 2) {
     return { ...service, items: locallyRanked };
@@ -144,12 +146,14 @@ async function rerankServiceUncached(
           {
             role: "system",
             content:
-              "You are a brutally accurate streaming recommendation ranker. Rank titles for the user's exact taste, not for generic popularity. Use semantic fit first, then audience/critic rating, then original streaming popularity. Strongly demote false positives. If the user asks about a subject such as dogs, chefs, lawyers, vampires, football, cowboys, etc., titles must actually be about or prominently include that subject; generic high-rated shows should rank low. For psychological thrillers, prefer dread, paranoia, obsession, mind games, mystery, crime, horror, sci-fi unease, cults, conspiracies, investigations, dark tension, or unreliable reality. Comedy, sitcom, workplace comedy, reality, talk show, game show, light documentary, or general drama should rank low unless the title is clearly also a dark thriller. For western/frontier/cowboy/outlaw requests, strongly prefer titles with western/frontier/cowboy/outlaw/saloon/ranch/frontier-town/old-west signals; generic acclaimed dramas or fantasy should rank low. For Reddit/word-of-mouth/cult/classic requests, prefer cult/beloved/high-rating candidates but still require topic fit. Score each title 0-100. Return JSON only: {\"ranked\":[{\"id\":\"...\",\"score\":87,\"reason\":\"2-5 words\"}]}. Include every supplied id exactly once. Never write reasons like 'no dogs' or 'no match'.",
+              "You are a brutally accurate streaming recommendation ranker. Rank titles for the user's exact taste, not for generic popularity. Use semantic fit first, then audience/critic rating, then original streaming popularity. Strongly demote false positives. If referenceTitles are supplied, treat them as taste anchors and infer shared themes, tone, structure, pacing, and audience appeal; do not require literal title-word matches. If discoveryMode is true, prefer less obvious high-fit titles over the most mainstream default when quality and fit are competitive. If the user asks about a subject such as dogs, chefs, lawyers, vampires, football, cowboys, etc., titles must actually be about or prominently include that subject; generic high-rated shows should rank low. For psychological thrillers, prefer dread, paranoia, obsession, mind games, mystery, crime, horror, sci-fi unease, cults, conspiracies, investigations, dark tension, or unreliable reality. Comedy, sitcom, workplace comedy, reality, talk show, game show, light documentary, or general drama should rank low unless the title is clearly also a dark thriller. For western/frontier/cowboy/outlaw requests, strongly prefer titles with western/frontier/cowboy/outlaw/saloon/ranch/frontier-town/old-west signals; generic acclaimed dramas or fantasy should rank low. For Reddit/word-of-mouth/cult/classic requests, prefer cult/beloved/high-rating candidates but still require topic fit. Score each title 0-100. Return JSON only: {\"ranked\":[{\"id\":\"...\",\"score\":87,\"reason\":\"2-5 grounded words\"}]}. Include every supplied id exactly once. Reasons must cite an actual match from title, genre, overview, rating, or requested taste. Never write reasons like 'no dogs' or 'no match'.",
           },
           {
             role: "user",
             content: JSON.stringify({
               request: preference,
+              referenceTitles: references,
+              discoveryMode,
               service: service.name,
               titles: locallyRanked.map((item, index) => ({
                 id: item.id,
@@ -234,7 +238,8 @@ function combinedScore(
   aiScore?: { score: number; index: number },
 ) {
   const local = localScore(item, terms, originalIndex, sort);
-  const ai = aiScore ? aiScore.score * 0.3 + Math.max(0, 12 - aiScore.index) * 0.2 : 0;
+  const aiWeight = terms.referenceTitles.length > 0 || terms.discoveryMode ? 0.56 : 0.38;
+  const ai = aiScore ? aiScore.score * aiWeight + Math.max(0, 12 - aiScore.index) * 0.35 : 0;
   return local + ai;
 }
 
@@ -290,7 +295,7 @@ function localScore(
   sort: SortKey,
 ) {
   const text = `${item.title} ${item.overview} ${item.genres.join(" ")}`.toLowerCase();
-  let score = (item.rating ?? 6) * 5 - originalIndex * windowRankWeight(sort);
+  let score = (item.rating ?? 6) * 5 - originalIndex * windowRankWeight(sort, terms);
   let positiveMatches = 0;
 
   for (const term of terms.positive) {
@@ -354,6 +359,16 @@ function localScore(
     }
   }
 
+  if (terms.discoveryMode) {
+    if (/\b(cult|underrated|hidden|offbeat|unsettling|slow burn|limited series|miniseries|international|foreign|docuseries|documentary)\b/.test(text)) {
+      score += 7;
+    }
+
+    if (originalIndex < 4 && (item.rating ?? 0) < 8) {
+      score -= 4;
+    }
+  }
+
   return score;
 }
 
@@ -373,6 +388,8 @@ function rankTerms(preference: string) {
   const positive = new Set<string>();
   const negative = new Set<string>();
   const requiredSubjects: Array<{ reason: string; matches: string[] }> = [];
+  const references = referenceTitles(preference);
+  const discoveryMode = wantsDiscovery(preference);
   let requiresTension = false;
   let requiresWestern = false;
 
@@ -394,8 +411,10 @@ function rankTerms(preference: string) {
     ["horror", "scary", "supernatural"].forEach((term) => positive.add(term));
   }
 
-  if (/\breddit|cult|beloved|people like|recommend\b/.test(lower)) {
-    ["cult", "classic", "acclaimed"].forEach((term) => positive.add(term));
+  if (/\breddit|cult|beloved|people like|recommend|underrated|hidden gem|less mainstream|not mainstream|overlooked\b/.test(
+    lower,
+  )) {
+    ["cult", "classic", "acclaimed", "underrated"].forEach((term) => positive.add(term));
   }
 
   if (/\bwestern|frontier|cowboy|outlaw|saloon|wild west\b/.test(lower)) {
@@ -408,7 +427,15 @@ function rankTerms(preference: string) {
     subject.matches.forEach((term) => positive.add(term));
   }
 
-  return { positive: [...positive], negative: [...negative], requiresTension, requiresWestern, requiredSubjects };
+  return {
+    positive: [...positive],
+    negative: [...negative],
+    requiresTension,
+    requiresWestern,
+    requiredSubjects,
+    referenceTitles: references,
+    discoveryMode,
+  };
 }
 
 function preferenceKeywords(preference: string) {
@@ -431,11 +458,61 @@ function preferenceKeywords(preference: string) {
     keywords.add("classic");
   }
 
+  if (/\bcrime|criminal|cartel|drug|kingpin|antihero|anti-hero|murder|killer|detective|investigation\b/.test(
+    lower,
+  )) {
+    keywords.add("crime");
+  }
+
+  if (/\bdocuseries|documentary|true crime|cult leader|commune|sect\b/.test(lower)) {
+    keywords.add("documentary");
+  }
+
+  if (/\bai|android|technology|tech|surveillance|robot|algorithm\b/.test(lower)) {
+    keywords.add("science fiction");
+  }
+
   for (const subject of subjectTerms(lower)) {
     keywords.add(subject.keyword);
   }
 
   return [...keywords].slice(0, 2);
+}
+
+function referenceTitles(preference: string) {
+  const matches = [
+    ...preference.matchAll(
+      /\b(?:like|similar to|in the vein of|reminds me of|if i like|if i liked)\s+([^.!?]{3,120})/gi,
+    ),
+  ];
+  const titles = new Set<string>();
+
+  for (const match of matches) {
+    const phrase = (match[1] ?? "")
+      .replace(/\b(?:recommend|recs?|suggest|show me|give me|find me|movies?|films?|tv|shows?|series|you think|i would|i'd|id|like|love|enjoy|please)\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    for (const part of phrase.split(/\s*(?:,|;|\/|\band\b|\bor\b)\s*/i)) {
+      const cleaned = part
+        .replace(/\b(?:on|from|with|that|are|is|was|were|but|not|more|less|good|great|best|top)\b/gi, " ")
+        .replace(/["'`]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (cleaned.length >= 3 && cleaned.length <= 50) {
+        titles.add(cleaned.toLowerCase());
+      }
+    }
+  }
+
+  return [...titles].slice(0, 5);
+}
+
+function wantsDiscovery(preference: string) {
+  return /\b(recommend|you think i'd like|you think id like|surprise me|hidden gems?|underrated|overlooked|less mainstream|not mainstream|cult|deep cut|deep cuts|under the radar|not obvious|less obvious)\b/i.test(
+    preference,
+  );
 }
 
 function subjectTerms(lowerPreference: string) {
@@ -550,15 +627,24 @@ function candidatePools(sort: SortKey, genre: GenreKey, keyword: string, prefere
     { sort, genre, keyword },
     { sort, genre, keyword: "" },
   ];
+  const references = referenceTitles(preference);
+
+  if (references.length > 0 || wantsDiscovery(preference)) {
+    pools.push({ sort: "popularity_alltime", genre, keyword: "" });
+  }
 
   for (const candidateKeyword of preferenceKeywords(preference)) {
     pools.push({ sort, genre: "all", keyword: candidateKeyword });
   }
 
-  return dedupePools(pools);
+  return dedupePools(pools).slice(0, 5);
 }
 
-function windowRankWeight(sort: SortKey) {
+function windowRankWeight(sort: SortKey, terms: ReturnType<typeof rankTerms>) {
+  if (terms.referenceTitles.length > 0 || terms.discoveryMode) {
+    return sort === "popularity_alltime" ? 0.45 : 0.7;
+  }
+
   if (sort === "popularity_1week") {
     return 3.4;
   }

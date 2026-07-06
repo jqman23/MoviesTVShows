@@ -401,9 +401,17 @@ h3 {
 }
 
 .match-reason {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-bottom: 8px;
   color: #8ed2ff;
   font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.match-reason span {
+  color: var(--muted);
   font-weight: 700;
 }
 
