@@ -378,7 +378,7 @@ export default function Home() {
                     </p>
                     {item.matchReason ? (
                       <p className="match-reason">
-                        <span>AI reasoning</span>
+                        <span>Why</span>
                         {item.matchReason}
                       </p>
                     ) : null}

@@ -17,8 +17,8 @@ const COUNTRY = "us";
 const CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_MODEL = "llama-3.3-70b-versatile";
-const DISCOVER_CACHE_VERSION = "discover-v7";
-const RERANK_CACHE_VERSION = "rerank-v9";
+const DISCOVER_CACHE_VERSION = "discover-v8";
+const RERANK_CACHE_VERSION = "rerank-v10";
 
 const services: Array<{ id: ServiceId; name: string; catalog: string; accent: string }> = [
   { id: "netflix", name: "Netflix", catalog: "netflix.subscription", accent: "#e50914" },
@@ -146,7 +146,7 @@ async function rerankServiceUncached(
           {
             role: "system",
             content:
-              "You are a brutally accurate streaming recommendation ranker. Rank titles for the user's exact taste, not for generic popularity. Use semantic fit first, then audience/critic rating, then original streaming popularity. Strongly demote false positives. If referenceTitles are supplied, treat them as taste anchors and infer shared themes, tone, structure, pacing, and audience appeal; do not require literal title-word matches. If discoveryMode is true, prefer less obvious high-fit titles over the most mainstream default when quality and fit are competitive. If the user asks about a subject such as dogs, chefs, lawyers, vampires, football, cowboys, etc., titles must actually be about or prominently include that subject; generic high-rated shows should rank low. For psychological thrillers, prefer dread, paranoia, obsession, mind games, mystery, crime, horror, sci-fi unease, cults, conspiracies, investigations, dark tension, or unreliable reality. Comedy, sitcom, workplace comedy, reality, talk show, game show, light documentary, or general drama should rank low unless the title is clearly also a dark thriller. For western/frontier/cowboy/outlaw requests, strongly prefer titles with western/frontier/cowboy/outlaw/saloon/ranch/frontier-town/old-west signals; generic acclaimed dramas or fantasy should rank low. For Reddit/word-of-mouth/cult/classic requests, prefer cult/beloved/high-rating candidates but still require topic fit. Score each title 0-100. Return JSON only: {\"ranked\":[{\"id\":\"...\",\"score\":87,\"reason\":\"2-5 grounded words\"}]}. Include every supplied id exactly once. Reasons must cite an actual match from title, genre, overview, rating, or requested taste. Never write reasons like 'no dogs' or 'no match'.",
+              "You are a brutally accurate streaming recommendation ranker. Rank titles for the user's exact taste, not for generic popularity. Use semantic fit first, then audience/critic rating, then original streaming popularity. Strongly demote false positives. If referenceTitles are supplied, treat them as taste anchors and infer shared themes, tone, structure, pacing, and audience appeal; do not require literal title-word matches, and score the reference titles themselves very low because the user wants recommendations. If discoveryMode is true, prefer less obvious high-fit titles over the most mainstream default when quality and fit are competitive. If the user asks about a subject such as dogs, chefs, lawyers, vampires, football, cowboys, etc., titles must actually be about or prominently include that subject; generic high-rated shows should rank low. For psychological thrillers, prefer dread, paranoia, obsession, mind games, mystery, crime, horror, sci-fi unease, cults, conspiracies, investigations, dark tension, or unreliable reality. Comedy, sitcom, workplace comedy, reality, talk show, game show, light documentary, or general drama should rank low unless the title is clearly also a dark thriller. For western/frontier/cowboy/outlaw requests, strongly prefer titles with western/frontier/cowboy/outlaw/saloon/ranch/frontier-town/old-west signals; generic acclaimed dramas or fantasy should rank low. For Reddit/word-of-mouth/cult/classic requests, prefer cult/beloved/high-rating candidates but still require topic fit. Score each title 0-100. Return JSON only: {\"ranked\":[{\"id\":\"...\",\"score\":87,\"reason\":\"2-4 specific words\"}]}. Include every supplied id exactly once. Reasons must be short positive evidence like 'criminal antihero', 'cult paranoia', or 'dark investigation'. Never write reasons like 'no dogs', 'less relevant', 'does not match', or 'no match'.",
           },
           {
             role: "user",
@@ -189,7 +189,7 @@ async function rerankServiceUncached(
           entry.id as string,
           {
             score: clampScore(entry.score),
-            reason: typeof entry.reason === "string" ? entry.reason.slice(0, 48) : "",
+            reason: typeof entry.reason === "string" ? cleanAiReason(entry.reason) : "",
             index,
           },
         ]),
@@ -235,11 +235,12 @@ function combinedScore(
   terms: ReturnType<typeof rankTerms>,
   originalIndex: number,
   sort: SortKey,
-  aiScore?: { score: number; index: number },
+  aiScore?: { score: number; reason: string; index: number },
 ) {
   const local = localScore(item, terms, originalIndex, sort);
   const aiWeight = terms.referenceTitles.length > 0 || terms.discoveryMode ? 0.56 : 0.38;
-  const ai = aiScore ? aiScore.score * aiWeight + Math.max(0, 12 - aiScore.index) * 0.35 : 0;
+  const aiPenalty = aiScore?.reason && isNegativeReason(aiScore.reason) ? 18 : 0;
+  const ai = aiScore ? aiScore.score * aiWeight + Math.max(0, 12 - aiScore.index) * 0.35 - aiPenalty : 0;
   return local + ai;
 }
 
@@ -248,7 +249,7 @@ function addMatchReason(item: Title, preference: string, aiReason = ""): Title {
   const text = `${item.title} ${item.overview} ${item.genres.join(" ")}`.toLowerCase();
   const reasons: string[] = [];
 
-  if (aiReason && !/\b(no match|no dogs|no dog|not about|none)\b/i.test(aiReason)) {
+  if (aiReason && !isNegativeReason(aiReason)) {
     reasons.push(aiReason);
   }
 
@@ -297,6 +298,10 @@ function localScore(
   const text = `${item.title} ${item.overview} ${item.genres.join(" ")}`.toLowerCase();
   let score = (item.rating ?? 6) * 5 - originalIndex * windowRankWeight(sort, terms);
   let positiveMatches = 0;
+
+  if (isReferenceTitle(item.title, terms.referenceTitles)) {
+    score -= 55;
+  }
 
   for (const term of terms.positive) {
     if (text.includes(term)) {
@@ -370,6 +375,27 @@ function localScore(
   }
 
   return score;
+}
+
+function cleanAiReason(reason: string) {
+  return reason
+    .replace(/[.!?].*$/, "")
+    .replace(/\b(with a high|with high|and high|rating|critic|audience|genres?|themes?)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 34);
+}
+
+function isNegativeReason(reason: string) {
+  return /\b(no match|no dogs?|not about|none|less relevant|lower relevance|doesn'?t match|do not match|don't match|but less|while highly rated)\b/i.test(
+    reason,
+  );
+}
+
+function isReferenceTitle(title: string, references: string[]) {
+  const normalizedTitle = normalizeComparableTitle(title);
+
+  return references.some((reference) => normalizeComparableTitle(reference) === normalizedTitle);
 }
 
 function subjectScore(item: Title, preference: string) {
@@ -507,6 +533,15 @@ function referenceTitles(preference: string) {
   }
 
   return [...titles].slice(0, 5);
+}
+
+function normalizeComparableTitle(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function wantsDiscovery(preference: string) {
