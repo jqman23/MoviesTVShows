@@ -286,6 +286,18 @@ input {
   gap: 18px;
 }
 
+.service-grid.service-count-1 {
+  grid-template-columns: 1fr;
+}
+
+.service-grid.service-count-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.service-grid.service-count-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .service {
   min-width: 0;
   border: 1px solid var(--line);

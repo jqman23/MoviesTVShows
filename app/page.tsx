@@ -351,7 +351,10 @@ export default function Home() {
 
       {isLoading && !data ? <SkeletonGrid /> : null}
 
-      <section className="service-grid" aria-label="Streaming service results">
+      <section
+        className={`service-grid service-count-${data?.services.length ?? selectedServices.size}`}
+        aria-label="Streaming service results"
+      >
         {data?.services.map((service) => {
           const isCollapsed = isMobile && collapsedServices.has(service.id);
           const panelId = `${service.id}-titles`;
