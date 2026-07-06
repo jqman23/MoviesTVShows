@@ -39,9 +39,14 @@ export type ServiceResult = {
   items: Title[];
 };
 
+export type TopPick = Title & {
+  services: string[];
+};
+
 export type DiscoverResponse = {
   source: "live" | "demo" | "mixed";
   message: string;
+  topPicks?: TopPick[];
   services: ServiceResult[];
 };
 

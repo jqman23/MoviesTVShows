@@ -351,6 +351,44 @@ export default function Home() {
 
       {isLoading && !data ? <SkeletonGrid /> : null}
 
+      {data?.topPicks && data.topPicks.length > 0 ? (
+        <section className="top-picks" aria-label="AI top picks">
+          <div className="top-picks-header">
+            <div>
+              <p>AI matched picks</p>
+              <h2>Best across selected platforms</h2>
+            </div>
+            <span>{data.topPicks.length}</span>
+          </div>
+
+          <div className="top-picks-list">
+            {data.topPicks.map((item, index) => (
+              <article className="top-pick" key={`${item.id}-${index}`}>
+                <div className="rank">#{index + 1}</div>
+                <div className="top-pick-copy">
+                  <div className="title-row">
+                    <h3>{item.title}</h3>
+                    {item.rating ? <span>{item.rating.toFixed(1)}</span> : null}
+                  </div>
+                  <p className="meta">
+                    {item.services.join(", ")}
+                    {item.year ? ` | ${item.year}` : ""}
+                    {formatGenres(item.genres) ? ` | ${formatGenres(item.genres)}` : ""}
+                  </p>
+                  {item.matchReason ? (
+                    <p className="match-reason">
+                      <span>Why:</span>
+                      {item.matchReason}
+                    </p>
+                  ) : null}
+                  <p className="overview">{item.overview}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section
         className={`service-grid service-count-${data?.services.length ?? selectedServices.size}`}
         aria-label="Streaming service results"

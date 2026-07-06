@@ -298,6 +298,68 @@ input {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.top-picks {
+  margin-bottom: 22px;
+  border: 1px solid var(--line);
+  border-top: 4px solid #8ed2ff;
+  border-radius: 8px;
+  background: rgba(25, 29, 36, 0.96);
+  overflow: hidden;
+}
+
+.top-picks-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.top-picks-header p {
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.top-picks-header h2 {
+  margin-bottom: 0;
+}
+
+.top-picks-header > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  color: #081016;
+  background: #8ed2ff;
+  font-weight: 800;
+}
+
+.top-picks-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.top-pick {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px 18px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.top-pick:nth-child(2n) {
+  border-right: 0;
+}
+
+.top-pick-copy {
+  min-width: 0;
+}
+
 .service {
   min-width: 0;
   border: 1px solid var(--line);
@@ -637,6 +699,28 @@ a:hover {
   .service-grid {
     grid-template-columns: 1fr;
     gap: 10px;
+  }
+
+  .top-picks {
+    margin-bottom: 10px;
+  }
+
+  .top-picks-header {
+    padding: 12px;
+  }
+
+  .top-picks-header h2 {
+    font-size: 1.08rem;
+  }
+
+  .top-picks-list {
+    grid-template-columns: 1fr;
+  }
+
+  .top-pick {
+    grid-template-columns: 34px minmax(0, 1fr);
+    padding: 12px;
+    border-right: 0;
   }
 
   .service-header {
