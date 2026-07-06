@@ -16,9 +16,11 @@ const GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions";
 const COUNTRY = "us";
 const CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_CACHE_SECONDS = 60 * 60 * 24;
-const RERANK_MODEL = "llama-3.3-70b-versatile";
-const DISCOVER_CACHE_VERSION = "discover-v10";
-const RERANK_CACHE_VERSION = "rerank-v12";
+const PROFILE_CACHE_SECONDS = 60 * 60 * 24 * 7;
+const SMART_MODEL = "openai/gpt-oss-120b";
+const DISCOVER_CACHE_VERSION = "discover-v11";
+const RERANK_CACHE_VERSION = "rerank-v13";
+const PROFILE_CACHE_VERSION = "profile-v1";
 
 const services: Array<{ id: ServiceId; name: string; catalog: string; accent: string }> = [
   { id: "netflix", name: "Netflix", catalog: "netflix.subscription", accent: "#e50914" },
@@ -26,6 +28,16 @@ const services: Array<{ id: ServiceId; name: string; catalog: string; accent: st
   { id: "peacock", name: "Peacock", catalog: "peacock.subscription", accent: "#ffd23f" },
   { id: "hulu", name: "Hulu", catalog: "hulu.subscription", accent: "#1ce783" },
 ];
+
+type TasteProfile = {
+  summary: string;
+  referenceTitles: string[];
+  keywords: string[];
+  mustHave: string[];
+  niceToHave: string[];
+  avoid: string[];
+  discoveryMode: boolean;
+};
 
 const sortKeys: SortKey[] = [
   "popularity_1week",
@@ -56,19 +68,20 @@ export async function GET(request: Request) {
   const preference = normalizePreference(searchParams.get("preference"));
   const apiKey = process.env.STREAMING_AVAILABILITY_API_KEY;
   const demoServices = getDemoServicesWithFallback(showType, sort, genre, keyword);
+  const profile = await getTasteProfile(preference);
 
   if (!apiKey) {
     return cachedJson({
       source: "demo",
       message:
         "Demo data is showing because STREAMING_AVAILABILITY_API_KEY is not set on the server.",
-      services: await rerankServices(demoServices, preference, sort),
+      services: await rerankServices(demoServices, preference, sort, profile),
     });
   }
 
   const liveResults = await Promise.allSettled(
     services.map((service) =>
-      getServiceCandidates(service, showType, sort, genre, keyword, preference, apiKey),
+      getServiceCandidates(service, showType, sort, genre, keyword, preference, profile, apiKey),
     ),
   );
 
@@ -87,26 +100,33 @@ export async function GET(request: Request) {
     message: hadFailure
       ? "Some live catalog requests were unavailable, so demo titles fill the gaps."
       : "Live Streaming Availability API results for US catalogs.",
-    services: await rerankServices(resolved, preference, sort),
+    services: await rerankServices(resolved, preference, sort, profile),
   });
 }
 
-async function rerankServices(serviceResults: ServiceResult[], preference: string, sort: SortKey) {
+async function rerankServices(
+  serviceResults: ServiceResult[],
+  preference: string,
+  sort: SortKey,
+  profile: TasteProfile,
+) {
   if (!preference) {
     return serviceResults;
   }
 
-  return Promise.all(serviceResults.map((service) => rerankService(service, preference, sort)));
+  return Promise.all(serviceResults.map((service) => rerankService(service, preference, sort, profile)));
 }
 
-function rerankService(service: ServiceResult, preference: string, sort: SortKey) {
+function rerankService(service: ServiceResult, preference: string, sort: SortKey, profile: TasteProfile) {
   return unstable_cache(
-    () => rerankServiceUncached(service, preference, sort),
+    () => rerankServiceUncached(service, preference, sort, profile),
     [
       RERANK_CACHE_VERSION,
       service.id,
       slug(preference),
       sort,
+      slug(profile.summary),
+      profile.keywords.join("|"),
       service.items.map((item) => item.id).join("|").slice(0, 240),
     ],
     {
@@ -120,11 +140,12 @@ async function rerankServiceUncached(
   service: ServiceResult,
   preference: string,
   sort: SortKey,
+  profile: TasteProfile,
 ): Promise<ServiceResult> {
-  const locallyRanked = localRerank(service.items, preference, sort);
+  const locallyRanked = localRerank(service.items, preference, sort, profile);
   const groqKey = process.env.GROQ_API;
-  const references = referenceTitles(preference);
-  const discoveryMode = wantsDiscovery(preference);
+  const references = profile.referenceTitles;
+  const discoveryMode = profile.discoveryMode;
 
   if (!groqKey || locallyRanked.length < 2) {
     return { ...service, items: locallyRanked };
@@ -138,9 +159,9 @@ async function rerankServiceUncached(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: RERANK_MODEL,
+        model: SMART_MODEL,
         temperature: 0,
-        max_tokens: 1200,
+        max_tokens: 1800,
         response_format: { type: "json_object" },
         messages: [
           {
@@ -152,6 +173,7 @@ async function rerankServiceUncached(
             role: "user",
             content: JSON.stringify({
               request: preference,
+              tasteProfile: profile,
               referenceTitles: references,
               discoveryMode,
               service: service.name,
@@ -205,23 +227,24 @@ async function rerankServiceUncached(
       return [item];
     });
 
-    return { ...service, items: guardedRerank([...ordered, ...itemMap.values()], preference, sort, aiScores) };
+    return { ...service, items: guardedRerank([...ordered, ...itemMap.values()], preference, sort, profile, aiScores) };
   } catch {
     return { ...service, items: locallyRanked };
   }
 }
 
-function localRerank(items: Title[], preference: string, sort: SortKey) {
-  return guardedRerank(items, preference, sort);
+function localRerank(items: Title[], preference: string, sort: SortKey, profile: TasteProfile) {
+  return guardedRerank(items, preference, sort, profile);
 }
 
 function guardedRerank(
   items: Title[],
   preference: string,
   sort: SortKey,
+  profile: TasteProfile,
   aiScores = new Map<string, { score: number; reason: string; index: number }>(),
 ) {
-  const terms = rankTerms(preference);
+  const terms = rankTerms(preference, profile);
 
   const ranked = [...items].sort((a, b) => {
     const scoreA = combinedScore(a, terms, items.indexOf(a), sort, aiScores.get(a.id));
@@ -233,7 +256,7 @@ function guardedRerank(
       ? ranked.filter((item) => !isReferenceTitle(item.title, terms.referenceTitles))
       : ranked;
 
-  return withoutReferences.map((item) => addMatchReason(item, preference, aiScores.get(item.id)?.reason));
+  return withoutReferences.map((item) => addMatchReason(item, preference, profile, aiScores.get(item.id)?.reason));
 }
 
 function combinedScore(
@@ -250,8 +273,8 @@ function combinedScore(
   return local + ai;
 }
 
-function addMatchReason(item: Title, preference: string, aiReason = ""): Title {
-  const terms = rankTerms(preference);
+function addMatchReason(item: Title, preference: string, profile: TasteProfile, aiReason = ""): Title {
+  const terms = rankTerms(preference, profile);
   const text = `${item.title} ${item.overview} ${item.genres.join(" ")}`.toLowerCase();
   const reasons: string[] = [];
 
@@ -279,6 +302,12 @@ function addMatchReason(item: Title, preference: string, aiReason = ""): Title {
 
   if (genreMatch && reasons.length < 2) {
     reasons.push(genreMatch);
+  }
+
+  const profileReason = [...terms.mustHave, ...terms.niceToHave].find((term) => text.includes(term));
+
+  if (profileReason && reasons.length < 2) {
+    reasons.push(profileReason);
   }
 
   if ((item.rating ?? 0) >= 7.5 && reasons.length < 2 && (!terms.discoveryMode || hasTasteSignal(text))) {
@@ -313,6 +342,20 @@ function localScore(
     if (text.includes(term)) {
       positiveMatches += 1;
       score += 4;
+    }
+  }
+
+  for (const term of terms.mustHave) {
+    if (text.includes(term)) {
+      positiveMatches += 2;
+      score += 11;
+    }
+  }
+
+  for (const term of terms.niceToHave) {
+    if (text.includes(term)) {
+      positiveMatches += 1;
+      score += 6;
     }
   }
 
@@ -379,6 +422,10 @@ function localScore(
       score -= 34;
     }
 
+    if (terms.mustHave.length > 0 && !terms.mustHave.some((term) => text.includes(term))) {
+      score -= 14;
+    }
+
     if (originalIndex < 4 && (item.rating ?? 0) < 8) {
       score -= 4;
     }
@@ -419,13 +466,13 @@ function subjectScore(item: Title, preference: string) {
   return terms.requiredSubjects.some((subject) => subject.matches.some((term) => text.includes(term)));
 }
 
-function rankTerms(preference: string) {
+function rankTerms(preference: string, profile = fallbackTasteProfile(preference)) {
   const lower = preference.toLowerCase();
   const positive = new Set<string>();
   const negative = new Set<string>();
   const requiredSubjects: Array<{ reason: string; matches: string[] }> = [];
-  const references = referenceTitles(preference);
-  const discoveryMode = wantsDiscovery(preference);
+  const references = profile.referenceTitles.length > 0 ? profile.referenceTitles : referenceTitles(preference);
+  const discoveryMode = profile.discoveryMode || wantsDiscovery(preference);
   let requiresTension = false;
   let requiresWestern = false;
 
@@ -463,9 +510,14 @@ function rankTerms(preference: string) {
     subject.matches.forEach((term) => positive.add(term));
   }
 
+  profile.keywords.forEach((term) => positive.add(term.toLowerCase()));
+  profile.avoid.forEach((term) => negative.add(term.toLowerCase()));
+
   return {
     positive: [...positive],
     negative: [...negative],
+    mustHave: profile.mustHave.map((term) => term.toLowerCase()),
+    niceToHave: profile.niceToHave.map((term) => term.toLowerCase()),
     requiresTension,
     requiresWestern,
     requiredSubjects,
@@ -473,6 +525,148 @@ function rankTerms(preference: string) {
     discoveryMode,
     preferenceText: lower,
   };
+}
+
+function getTasteProfile(preference: string): Promise<TasteProfile> {
+  if (!preference) {
+    return Promise.resolve(fallbackTasteProfile(""));
+  }
+
+  return unstable_cache(
+    () => getTasteProfileUncached(preference),
+    [PROFILE_CACHE_VERSION, slug(preference)],
+    {
+      revalidate: PROFILE_CACHE_SECONDS,
+      tags: [`profile-${slug(preference)}`],
+    },
+  )();
+}
+
+async function getTasteProfileUncached(preference: string): Promise<TasteProfile> {
+  const groqKey = process.env.GROQ_API;
+
+  if (!groqKey) {
+    return fallbackTasteProfile(preference);
+  }
+
+  try {
+    const response = await fetch(GROQ_BASE, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${groqKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: SMART_MODEL,
+        temperature: 0,
+        max_tokens: 900,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content:
+              "Convert a natural language streaming request into a taste profile for a recommendation engine. Infer from reference titles using general cultural knowledge, but do not hardcode exact recommendations. Return JSON only: {\"summary\":\"...\",\"referenceTitles\":[...],\"keywords\":[...],\"mustHave\":[...],\"niceToHave\":[...],\"avoid\":[...],\"discoveryMode\":true}. keywords are short Streaming Availability search terms, max 8. mustHave/niceToHave/avoid are lowercase evidence terms likely to appear in title, genres, or overview. For 'like X' prompts, include inferred themes, tone, genre, subject matter, and adjacent discovery terms. Avoid generic words like good, best, popular, rating, show, series.",
+          },
+          {
+            role: "user",
+            content: preference,
+          },
+        ],
+      }),
+      next: {
+        revalidate: PROFILE_CACHE_SECONDS,
+        tags: [`groq-profile-${slug(preference)}`],
+      },
+    });
+
+    if (!response.ok) {
+      return fallbackTasteProfile(preference);
+    }
+
+    const payload = (await response.json()) as GroqResponse;
+    const content = payload.choices?.[0]?.message?.content ?? "";
+    return normalizeTasteProfile(JSON.parse(content) as Partial<TasteProfile>, preference);
+  } catch {
+    return fallbackTasteProfile(preference);
+  }
+}
+
+function normalizeTasteProfile(profile: Partial<TasteProfile>, preference: string): TasteProfile {
+  const fallback = fallbackTasteProfile(preference);
+
+  return {
+    summary: cleanListText(profile.summary).slice(0, 120) || fallback.summary,
+    referenceTitles: cleanList(profile.referenceTitles, 5, 50, fallback.referenceTitles),
+    keywords: cleanList(profile.keywords, 8, 32, fallback.keywords),
+    mustHave: cleanList(profile.mustHave, 10, 32, fallback.mustHave),
+    niceToHave: cleanList(profile.niceToHave, 12, 32, fallback.niceToHave),
+    avoid: cleanList(profile.avoid, 10, 32, fallback.avoid),
+    discoveryMode: typeof profile.discoveryMode === "boolean" ? profile.discoveryMode : fallback.discoveryMode,
+  };
+}
+
+function fallbackTasteProfile(preference: string): TasteProfile {
+  const lower = preference.toLowerCase();
+  const references = referenceTitles(preference);
+  const keywords = new Set(preferenceKeywords(preference));
+  const mustHave = new Set<string>();
+  const niceToHave = new Set<string>();
+  const avoid = new Set<string>();
+
+  if (references.length > 0 || wantsDiscovery(preference)) {
+    ["crime", "thriller", "mystery", "conspiracy"].forEach((term) => keywords.add(term));
+    ["crime", "mystery"].forEach((term) => mustHave.add(term));
+    ["dark", "conspiracy", "psychological", "cult", "drug", "cartel", "technology", "surveillance"].forEach((term) =>
+      niceToHave.add(term),
+    );
+    ["romance", "sitcom", "medical", "workplace comedy", "fantasy adventure"].forEach((term) => avoid.add(term));
+  }
+
+  if (/\bdocuseries|documentary|cult|commune|sect|true crime\b/.test(lower)) {
+    ["documentary", "cult", "true crime"].forEach((term) => keywords.add(term));
+    ["cult", "documentary"].forEach((term) => niceToHave.add(term));
+  }
+
+  if (/\bai|android|robot|technology|tech|surveillance|cassandra\b/.test(lower)) {
+    ["science fiction", "technology", "thriller"].forEach((term) => keywords.add(term));
+    ["technology", "surveillance", "android", "science fiction"].forEach((term) => niceToHave.add(term));
+  }
+
+  return {
+    summary: references.length > 0 ? `Similar to ${references.join(", ")}` : preference.slice(0, 120),
+    referenceTitles: references,
+    keywords: [...keywords].slice(0, 8),
+    mustHave: [...mustHave].slice(0, 10),
+    niceToHave: [...niceToHave].slice(0, 12),
+    avoid: [...avoid].slice(0, 10),
+    discoveryMode: wantsDiscovery(preference) || references.length > 0,
+  };
+}
+
+function cleanList(value: unknown, limit: number, maxLength: number, fallback: string[]) {
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
+
+  const cleaned = value.flatMap((item) => {
+    if (typeof item !== "string") {
+      return [];
+    }
+
+    const text = cleanListText(item).slice(0, maxLength);
+    return text.length >= 2 ? [text.toLowerCase()] : [];
+  });
+
+  return [...new Set(cleaned)].slice(0, limit);
+}
+
+function cleanListText(value: unknown) {
+  return typeof value === "string"
+    ? value
+        .replace(/["'`]/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+    : "";
 }
 
 function hasGenericTasteMismatch(text: string, lowerPreference: string) {
@@ -653,13 +847,14 @@ async function getServiceCandidates(
   genre: GenreKey,
   keyword: string,
   preference: string,
+  profile: TasteProfile,
   apiKey: string,
 ) {
   if (!preference) {
     return getServiceWithFallback(service, showType, sort, genre, keyword, apiKey);
   }
 
-  const pools = candidatePools(sort, genre, keyword, preference);
+  const pools = candidatePools(sort, genre, keyword, preference, profile);
   const results = await Promise.allSettled(
     pools.map((pool) => getCachedService(service, showType, pool.sort, pool.genre, pool.keyword, apiKey)),
   );
@@ -695,22 +890,33 @@ async function getServiceCandidates(
   };
 }
 
-function candidatePools(sort: SortKey, genre: GenreKey, keyword: string, preference: string) {
+function candidatePools(
+  sort: SortKey,
+  genre: GenreKey,
+  keyword: string,
+  preference: string,
+  profile: TasteProfile,
+) {
   const pools: Array<{ sort: SortKey; genre: GenreKey; keyword: string }> = [
     { sort, genre, keyword },
     { sort, genre, keyword: "" },
   ];
-  const references = referenceTitles(preference);
+  const references = profile.referenceTitles.length > 0 ? profile.referenceTitles : referenceTitles(preference);
 
-  if (references.length > 0 || wantsDiscovery(preference)) {
+  if (references.length > 0 || profile.discoveryMode || wantsDiscovery(preference)) {
     pools.push({ sort: "popularity_alltime", genre, keyword: "" });
   }
 
-  for (const candidateKeyword of preferenceKeywords(preference)) {
+  const candidateKeywords = [...profile.keywords, ...preferenceKeywords(preference)];
+
+  for (const candidateKeyword of [...new Set(candidateKeywords)].slice(0, 6)) {
     pools.push({ sort, genre: "all", keyword: candidateKeyword });
+    if (references.length > 0 || profile.discoveryMode) {
+      pools.push({ sort: "popularity_alltime", genre: "all", keyword: candidateKeyword });
+    }
   }
 
-  return dedupePools(pools).slice(0, 5);
+  return dedupePools(pools).slice(0, 9);
 }
 
 function windowRankWeight(sort: SortKey, terms: ReturnType<typeof rankTerms>) {
