@@ -51,6 +51,12 @@ The frontend calls `/api/discover`. That server route reads `process.env.STREAMI
 
 ## API Usage and Caching
 
+The app uses a three-tier search pipeline:
+
+1. Interpret the submitted phrase with Groq into broad filters: content type, genre, optional time range, and only truly necessary keywords.
+2. Fetch streamable US candidates from Streaming Availability for each service using the selected time range.
+3. Rerank those returned candidates with the original phrase, title metadata, overview, genres, rating, and model scoring.
+
 The API route fetches only the selected content type and caches each upstream request by:
 
 ```txt
@@ -59,7 +65,7 @@ country + service + type + sort window
 
 Responses are cached for six hours with Vercel/CDN `s-maxage` headers and server-side Next.js cache entries. The browser also reuses previously loaded filter combinations during the current session, so switching back to an already loaded view does not call the app API again.
 
-Natural-language search calls Groq only when the user submits the search form. The server caches each interpreted phrase for 24 hours, and the browser also reuses repeated phrases during the same session. The selected time window controls the candidate pool, while rating/quality is always part of the final ranking. The original phrase is also used to build a bounded broader candidate pool per service, then rerank those titles by semantic fit, rating, original time-window rank, and model score. If Groq is unavailable, a local scorer still reranks broad candidates so the app keeps showing results.
+Natural-language search calls Groq only when the user submits the search form. The server caches each interpreted phrase for 24 hours, and the browser also reuses repeated phrases during the same session. The selected time window controls the candidate pool, while rating/quality is always part of the final ranking. The original phrase is also used to build a bounded broader candidate pool per service, then rerank those titles by semantic fit, rating, original time-window rank, and model score. If Groq is unavailable, a local scorer still reranks broad candidates so the app keeps showing results. To stay free-tier friendly, the app does not call Groq while typing and does not use additional external APIs.
 
 ## Commands
 
