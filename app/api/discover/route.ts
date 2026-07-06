@@ -17,8 +17,8 @@ const COUNTRY = "us";
 const CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_CACHE_SECONDS = 60 * 60 * 24;
 const RERANK_MODEL = "llama-3.3-70b-versatile";
-const DISCOVER_CACHE_VERSION = "discover-v8";
-const RERANK_CACHE_VERSION = "rerank-v10";
+const DISCOVER_CACHE_VERSION = "discover-v9";
+const RERANK_CACHE_VERSION = "rerank-v11";
 
 const services: Array<{ id: ServiceId; name: string; catalog: string; accent: string }> = [
   { id: "netflix", name: "Netflix", catalog: "netflix.subscription", accent: "#e50914" },
@@ -223,11 +223,17 @@ function guardedRerank(
 ) {
   const terms = rankTerms(preference);
 
-  return [...items].sort((a, b) => {
+  const ranked = [...items].sort((a, b) => {
     const scoreA = combinedScore(a, terms, items.indexOf(a), sort, aiScores.get(a.id));
     const scoreB = combinedScore(b, terms, items.indexOf(b), sort, aiScores.get(b.id));
     return scoreB - scoreA;
-  }).map((item) => addMatchReason(item, preference, aiScores.get(item.id)?.reason));
+  });
+  const withoutReferences =
+    terms.referenceTitles.length > 0
+      ? ranked.filter((item) => !isReferenceTitle(item.title, terms.referenceTitles))
+      : ranked;
+
+  return withoutReferences.map((item) => addMatchReason(item, preference, aiScores.get(item.id)?.reason));
 }
 
 function combinedScore(
@@ -369,6 +375,10 @@ function localScore(
       score += 7;
     }
 
+    if (hasGenericTasteMismatch(text, terms.preferenceText)) {
+      score -= 18;
+    }
+
     if (originalIndex < 4 && (item.rating ?? 0) < 8) {
       score -= 4;
     }
@@ -461,7 +471,32 @@ function rankTerms(preference: string) {
     requiredSubjects,
     referenceTitles: references,
     discoveryMode,
+    preferenceText: lower,
   };
+}
+
+function hasGenericTasteMismatch(text: string, lowerPreference: string) {
+  const hasDarkSignal =
+    /\b(crime|criminal|thriller|mystery|murder|killer|detective|investigation|conspiracy|cult|dark|drug|cartel|mob|gang|psychological|paranoia|horror|science fiction|sci-fi|sci fi|ai|robot|android)\b/.test(
+      text,
+    );
+
+  if (hasDarkSignal) {
+    return false;
+  }
+
+  const requestedLightLane =
+    /\b(comedy|funny|sitcom|romance|romantic|medical|doctor|hospital|fantasy|dragon|period|historical|adventure|family)\b/.test(
+      lowerPreference,
+    );
+
+  if (requestedLightLane) {
+    return false;
+  }
+
+  return /\b(comedy|sitcom|romance|romantic|medical|hospital|doctor|fantasy|dragon|period drama|family drama|workplace|adventure|historical adventure)\b/.test(
+    text,
+  );
 }
 
 function preferenceKeywords(preference: string) {

@@ -415,10 +415,6 @@ h3 {
   font-weight: 700;
 }
 
-.match-reason span::after {
-  content: ":";
-}
-
 .overview {
   display: -webkit-box;
   margin-bottom: 10px;

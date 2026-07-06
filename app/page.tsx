@@ -378,7 +378,7 @@ export default function Home() {
                     </p>
                     {item.matchReason ? (
                       <p className="match-reason">
-                        <span>Why</span>
+                        <span>Why:</span>
                         {item.matchReason}
                       </p>
                     ) : null}
